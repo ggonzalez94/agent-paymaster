@@ -252,7 +252,7 @@ describe("TaikoUsdcPaymaster", () => {
         USER_OP_HASH,
         ethers.parseEther("0.001"),
       ),
-    ).to.be.revertedWithCustomError(paymaster, "QuoteAlreadyUsed");
+    ).to.be.revertedWithCustomError(paymaster, "NonceAlreadyUsed");
   });
 
   it("uses permit data when allowance is missing", async () => {
@@ -653,5 +653,283 @@ describe("TaikoUsdcPaymaster", () => {
     expect(await paymaster.postOpOverheadGas()).to.equal(50_000n);
     expect(await paymaster.maxNativeCostWei()).to.equal(ethers.parseEther("1"));
     expect(await paymaster.maxQuoteTtlSeconds()).to.equal(300n);
+  });
+
+  // --- Security fix tests ---
+
+  it("[I-2] rejects reuse of same nonce across different quotes", async () => {
+    const { sender, quoteSigner, entryPoint, usdc, paymaster, chainId } = await deployFixture();
+
+    await usdc.connect(sender).approve(await paymaster.getAddress(), 10_000_000n);
+
+    // First quote with nonce=50 succeeds
+    const { userOperation: op1 } = await buildUserOperation({
+      sender: sender.address,
+      callData: "0xaa11",
+      entryPoint: await entryPoint.getAddress(),
+      usdc: await usdc.getAddress(),
+      paymaster: await paymaster.getAddress(),
+      chainId,
+      quoteSigner,
+      maxTokenCost: 3_000_000n,
+      nonce: 50n,
+    });
+
+    await entryPoint.callValidatePaymaster(
+      await paymaster.getAddress(),
+      op1,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    // Second quote with same nonce=50 but different callData — must fail
+    const { userOperation: op2 } = await buildUserOperation({
+      sender: sender.address,
+      callData: "0xbb22",
+      entryPoint: await entryPoint.getAddress(),
+      usdc: await usdc.getAddress(),
+      paymaster: await paymaster.getAddress(),
+      chainId,
+      quoteSigner,
+      maxTokenCost: 3_000_000n,
+      nonce: 50n,
+    });
+
+    await expect(
+      entryPoint.callValidatePaymaster(
+        await paymaster.getAddress(),
+        op2,
+        USER_OP_HASH,
+        ethers.parseEther("0.001"),
+      ),
+    ).to.be.revertedWithCustomError(paymaster, "NonceAlreadyUsed");
+  });
+
+  it("[I-1] uses cached oracle price in postOp, not live price", async () => {
+    const { sender, quoteSigner, entryPoint, usdc, oracle, paymaster, chainId } = await deployFixture();
+
+    const maxTokenCost = 3_000_000n;
+    await usdc.connect(sender).approve(await paymaster.getAddress(), maxTokenCost);
+
+    const { userOperation } = await buildUserOperation({
+      sender: sender.address,
+      callData: "0xcc33",
+      entryPoint: await entryPoint.getAddress(),
+      usdc: await usdc.getAddress(),
+      paymaster: await paymaster.getAddress(),
+      chainId,
+      quoteSigner,
+      maxTokenCost,
+      nonce: 60n,
+    });
+
+    const [context] = await entryPoint.callValidatePaymaster.staticCall(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    await entryPoint.callValidatePaymaster(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    // Change oracle price after validation (simulates price manipulation)
+    await oracle.setUsdcPerEth(2_000_000n); // doubled
+
+    // postOp should use cached price (1_000_000), not live (2_000_000)
+    const actualGasCost = ethers.parseEther("0.0004");
+    await expect(
+      entryPoint.callPostOp(await paymaster.getAddress(), 0, context, actualGasCost, 0),
+    )
+      .to.emit(paymaster, "UserOperationSponsored")
+      .withArgs(
+        await usdc.getAddress(),
+        sender.address,
+        USER_OP_HASH,
+        1_000_000n, // cached oracle price, not 2_000_000
+        400n, // 0.0004 ETH * 1_000_000 USDC/ETH = 400 micros
+        400n,
+        2_999_600n,
+      );
+  });
+
+  it("[C-1] reverts postOp when shortfall pull fails due to revoked allowance", async () => {
+    const { sender, quoteSigner, entryPoint, usdc, paymaster, chainId } = await deployFixture();
+
+    const maxTokenCost = 1_000_000n;
+    // Only approve maxTokenCost (no excess for shortfall pull)
+    await usdc.connect(sender).approve(await paymaster.getAddress(), maxTokenCost);
+
+    const { userOperation } = await buildUserOperation({
+      sender: sender.address,
+      callData: "0xdd44",
+      entryPoint: await entryPoint.getAddress(),
+      usdc: await usdc.getAddress(),
+      paymaster: await paymaster.getAddress(),
+      chainId,
+      quoteSigner,
+      maxTokenCost,
+      nonce: 70n,
+    });
+
+    const [context] = await entryPoint.callValidatePaymaster.staticCall(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    await entryPoint.callValidatePaymaster(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    // Revoke remaining allowance
+    await usdc.connect(sender).approve(await paymaster.getAddress(), 0n);
+
+    // postOp with high gas cost (needs shortfall pull) should revert
+    await expect(
+      entryPoint.callPostOp(await paymaster.getAddress(), 0, context, ethers.parseEther("2"), 0),
+    ).to.be.revertedWithCustomError(paymaster, "TokenTransferFailed");
+  });
+
+  it("[I-4] does not pull additional on opReverted, caps at prefund", async () => {
+    const { sender, quoteSigner, entryPoint, usdc, paymaster, chainId } = await deployFixture();
+
+    const maxTokenCost = 1_000_000n;
+    await usdc.connect(sender).approve(await paymaster.getAddress(), 5_000_000n);
+
+    const { userOperation } = await buildUserOperation({
+      sender: sender.address,
+      callData: "0xee55",
+      entryPoint: await entryPoint.getAddress(),
+      usdc: await usdc.getAddress(),
+      paymaster: await paymaster.getAddress(),
+      chainId,
+      quoteSigner,
+      maxTokenCost,
+      nonce: 80n,
+    });
+
+    const [context] = await entryPoint.callValidatePaymaster.staticCall(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    await entryPoint.callValidatePaymaster(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    // opReverted with high gas — should NOT pull additional, just keep prefund
+    await expect(
+      entryPoint.callPostOp(await paymaster.getAddress(), 1, context, ethers.parseEther("2"), 0),
+    )
+      .to.emit(paymaster, "UserOperationSponsored")
+      .withArgs(
+        await usdc.getAddress(),
+        sender.address,
+        USER_OP_HASH,
+        1_000_000n,
+        2_000_000n,
+        1_000_000n, // capped at prefund, no additional pull
+        0n,
+      );
+
+    // Paymaster should only hold the original prefund, not more
+    expect(await usdc.balanceOf(await paymaster.getAddress())).to.equal(1_000_000n);
+  });
+
+  it("[I-5] prevents withdrawToken from sweeping locked USDC prefund", async () => {
+    const { owner, sender, quoteSigner, entryPoint, usdc, paymaster, chainId, receiver } =
+      await deployFixture();
+
+    const maxTokenCost = 3_000_000n;
+    await usdc.connect(sender).approve(await paymaster.getAddress(), maxTokenCost);
+
+    const { userOperation } = await buildUserOperation({
+      sender: sender.address,
+      callData: "0xff66",
+      entryPoint: await entryPoint.getAddress(),
+      usdc: await usdc.getAddress(),
+      paymaster: await paymaster.getAddress(),
+      chainId,
+      quoteSigner,
+      maxTokenCost,
+      nonce: 90n,
+    });
+
+    // Validate locks the prefund
+    await entryPoint.callValidatePaymaster(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    expect(await paymaster.lockedUsdcPrefund()).to.equal(maxTokenCost);
+
+    // Owner cannot withdraw locked USDC
+    await expect(
+      paymaster.connect(owner).withdrawToken(await usdc.getAddress(), receiver.address, maxTokenCost),
+    ).to.be.revertedWithCustomError(paymaster, "InsufficientUnlockedBalance");
+
+    // Mint extra USDC directly to paymaster (simulates accumulated fees)
+    await usdc.mint(await paymaster.getAddress(), 500_000n);
+
+    // Owner can withdraw the unlocked surplus
+    await paymaster.connect(owner).withdrawToken(await usdc.getAddress(), receiver.address, 500_000n);
+    expect(await usdc.balanceOf(receiver.address)).to.equal(500_000n);
+  });
+
+  it("[I-5] unlocks prefund after postOp completes", async () => {
+    const { sender, quoteSigner, entryPoint, usdc, paymaster, chainId } = await deployFixture();
+
+    const maxTokenCost = 3_000_000n;
+    await usdc.connect(sender).approve(await paymaster.getAddress(), maxTokenCost);
+
+    const { userOperation } = await buildUserOperation({
+      sender: sender.address,
+      callData: "0x1177",
+      entryPoint: await entryPoint.getAddress(),
+      usdc: await usdc.getAddress(),
+      paymaster: await paymaster.getAddress(),
+      chainId,
+      quoteSigner,
+      maxTokenCost,
+      nonce: 91n,
+    });
+
+    const [context] = await entryPoint.callValidatePaymaster.staticCall(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    await entryPoint.callValidatePaymaster(
+      await paymaster.getAddress(),
+      userOperation,
+      USER_OP_HASH,
+      ethers.parseEther("0.001"),
+    );
+
+    expect(await paymaster.lockedUsdcPrefund()).to.equal(maxTokenCost);
+
+    // Complete the operation
+    await entryPoint.callPostOp(await paymaster.getAddress(), 0, context, ethers.parseEther("0.0004"), 0);
+
+    // Locked prefund should be zero after postOp
+    expect(await paymaster.lockedUsdcPrefund()).to.equal(0n);
   });
 });

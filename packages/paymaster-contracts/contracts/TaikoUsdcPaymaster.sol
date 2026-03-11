@@ -57,6 +57,7 @@ contract TaikoUsdcPaymaster is IPaymaster {
         bytes32 userOpHash;
         bytes32 quoteHash;
         uint256 prefund;
+        uint256 oraclePrice;
     }
 
     uint256 private constant _MAX_BPS = 10_000;
@@ -98,6 +99,8 @@ contract TaikoUsdcPaymaster is IPaymaster {
     error InvalidLimits();
     error TokenTransferFailed();
     error ReentrancyGuard();
+    error NonceAlreadyUsed();
+    error InsufficientUnlockedBalance();
 
     event UserOperationSponsored(
         address indexed token,
@@ -138,6 +141,8 @@ contract TaikoUsdcPaymaster is IPaymaster {
     mapping(bytes32 => bool) public usedQuoteHashes;
 
     uint256 private _reentrancyStatus;
+    uint256 public lockedUsdcPrefund;
+    mapping(address => mapping(uint256 => bool)) public usedNonces;
 
     constructor(
         address owner_,
@@ -229,6 +234,10 @@ contract TaikoUsdcPaymaster is IPaymaster {
 
         _validateQuote(userOp, quote);
 
+        if (usedNonces[userOp.sender][quote.nonce]) {
+            revert NonceAlreadyUsed();
+        }
+
         bytes32 signedQuoteHash = _hashTypedDataV4(_hashQuote(quote));
 
         if (usedQuoteHashes[signedQuoteHash]) {
@@ -239,7 +248,8 @@ contract TaikoUsdcPaymaster is IPaymaster {
             revert InvalidQuoteSignature();
         }
 
-        uint256 requiredPrefund = _applySurcharge(priceOracle.quoteUsdcForWei(maxCost));
+        uint256 cachedOraclePrice = priceOracle.usdcPerEth();
+        uint256 requiredPrefund = _applySurcharge((maxCost * cachedOraclePrice) / 1e18);
         if (requiredPrefund > quote.maxTokenCost) {
             revert MaxCostExceeded();
         }
@@ -267,11 +277,19 @@ contract TaikoUsdcPaymaster is IPaymaster {
         }
 
         usedQuoteHashes[signedQuoteHash] = true;
+        usedNonces[userOp.sender][quote.nonce] = true;
 
         _safeTransferFrom(address(usdc), userOp.sender, address(this), quote.maxTokenCost);
+        lockedUsdcPrefund += quote.maxTokenCost;
 
         context = abi.encode(
-            PaymasterContext({sender: userOp.sender, userOpHash: userOpHash, quoteHash: signedQuoteHash, prefund: quote.maxTokenCost})
+            PaymasterContext({
+                sender: userOp.sender,
+                userOpHash: userOpHash,
+                quoteHash: signedQuoteHash,
+                prefund: quote.maxTokenCost,
+                oraclePrice: cachedOraclePrice
+            })
         );
         validationData = _packValidationData(false, quote.validUntil, quote.validAfter);
     }
@@ -285,30 +303,41 @@ contract TaikoUsdcPaymaster is IPaymaster {
         PaymasterContext memory paymasterContext = abi.decode(context, (PaymasterContext));
 
         uint256 nativeCostWithOverhead = actualGasCost + (actualUserOpFeePerGas * postOpOverheadGas);
-        uint256 actualTokenNeeded = _applySurcharge(priceOracle.quoteUsdcForWei(nativeCostWithOverhead));
+        uint256 actualTokenNeeded = _applySurcharge((nativeCostWithOverhead * paymasterContext.oraclePrice) / 1e18);
 
         uint256 feeTokenAmount = paymasterContext.prefund;
         uint256 refundAmount;
 
-        if (mode != PostOpMode.postOpReverted) {
+        if (mode == PostOpMode.opSucceeded) {
             if (actualTokenNeeded < paymasterContext.prefund) {
                 refundAmount = paymasterContext.prefund - actualTokenNeeded;
                 feeTokenAmount = actualTokenNeeded;
                 if (refundAmount > 0) {
                     _safeTransfer(address(usdc), paymasterContext.sender, refundAmount);
                 }
-            } else if (actualTokenNeeded > paymasterContext.prefund && mode == PostOpMode.opSucceeded) {
+            } else if (actualTokenNeeded > paymasterContext.prefund) {
                 uint256 shortfall = actualTokenNeeded - paymasterContext.prefund;
-                uint256 additionalPulled = _tryPullAdditionalCharge(paymasterContext.sender, shortfall);
-                feeTokenAmount = paymasterContext.prefund + additionalPulled;
+                _safeTransferFrom(address(usdc), paymasterContext.sender, address(this), shortfall);
+                feeTokenAmount = paymasterContext.prefund + shortfall;
+            }
+        } else if (mode == PostOpMode.opReverted) {
+            if (actualTokenNeeded < paymasterContext.prefund) {
+                refundAmount = paymasterContext.prefund - actualTokenNeeded;
+                feeTokenAmount = actualTokenNeeded;
+                if (refundAmount > 0) {
+                    _safeTransfer(address(usdc), paymasterContext.sender, refundAmount);
+                }
             }
         }
+        // PostOpMode.postOpReverted: keep full prefund, no transfers
+
+        lockedUsdcPrefund -= paymasterContext.prefund;
 
         emit UserOperationSponsored(
             address(usdc),
             paymasterContext.sender,
             paymasterContext.userOpHash,
-            priceOracle.usdcPerEth(),
+            paymasterContext.oraclePrice,
             actualTokenNeeded,
             feeTokenAmount,
             refundAmount
@@ -401,6 +430,12 @@ contract TaikoUsdcPaymaster is IPaymaster {
     }
 
     function withdrawToken(address token, address to, uint256 amount) external onlyOwner {
+        if (token == address(usdc)) {
+            uint256 available = usdc.balanceOf(address(this)) - lockedUsdcPrefund;
+            if (amount > available) {
+                revert InsufficientUnlockedBalance();
+            }
+        }
         _safeTransfer(token, to, amount);
     }
 
@@ -516,24 +551,6 @@ contract TaikoUsdcPaymaster is IPaymaster {
             maxQuoteTtlSeconds_ == 0
         ) {
             revert InvalidLimits();
-        }
-    }
-
-    function _tryPullAdditionalCharge(address from, uint256 requestedAmount) private returns (uint256 pulledAmount) {
-        uint256 allowance = usdc.allowance(from, address(this));
-        uint256 balance = usdc.balanceOf(from);
-
-        pulledAmount = requestedAmount;
-
-        if (pulledAmount > allowance) {
-            pulledAmount = allowance;
-        }
-        if (pulledAmount > balance) {
-            pulledAmount = balance;
-        }
-
-        if (pulledAmount > 0) {
-            _safeTransferFrom(address(usdc), from, address(this), pulledAmount);
         }
     }
 
