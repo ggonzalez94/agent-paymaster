@@ -1,0 +1,22 @@
+services:
+  api:
+    build: .
+    command: pnpm --filter @agent-paymaster/api dev
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+  bundler:
+    build: .
+    command: pnpm --filter @agent-paymaster/bundler dev
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/node_modules
