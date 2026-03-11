@@ -70,7 +70,7 @@ export function Pricing() {
             </div>
             <div className="mt-4 flex items-baseline gap-1">
               <span className="text-4xl font-extrabold text-surface-900">
-                8%
+                5%
               </span>
               <span className="text-surface-500">gas surcharge</span>
             </div>

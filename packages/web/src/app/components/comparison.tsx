@@ -8,7 +8,7 @@ const providers = [
       bundler: true,
       paymaster: true,
       permitFlow: true,
-      pricing: "8%",
+      pricing: "5%",
     },
   },
   {
