@@ -1,4 +1,4 @@
-export type ChainName = "taikoMainnet" | "taikoHekla";
+export type ChainName = "taikoMainnet" | "taikoHekla" | "taikoHoodi";
 
 export interface RpcConfig {
   chain: ChainName;

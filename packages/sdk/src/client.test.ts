@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AgentPaymasterClient } from "./client.js";
-import type { JsonRpcRequestError, RateLimitError } from "./errors.js";
+import type { AgentPaymasterSdkError, JsonRpcRequestError, RateLimitError } from "./errors.js";
 import type { UserOperation } from "./types.js";
 
 const ENTRY_POINT = "0x0000000071727de22e5e9d8baf0edac6f37da032";
@@ -89,6 +89,33 @@ describe("AgentPaymasterClient", () => {
     });
   });
 
+  it("preserves HTTP status for in-band json-rpc errors", async () => {
+    const client = new AgentPaymasterClient({
+      apiUrl: "http://localhost:3000",
+      fetchImpl: async () =>
+        makeResponse(
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            error: {
+              code: -32000,
+              message: "Upstream unavailable",
+            },
+          },
+          202,
+        ),
+    });
+
+    await expect(client.ethSendUserOperation(SAMPLE_USER_OPERATION, ENTRY_POINT)).rejects.toMatchObject<
+      Partial<JsonRpcRequestError>
+    >({
+      name: "JsonRpcRequestError",
+      rpcCode: -32000,
+      message: "Upstream unavailable",
+      status: 202,
+    });
+  });
+
   it("returns paymaster quote from REST endpoint", async () => {
     const client = new AgentPaymasterClient({
       apiUrl: "http://localhost:3000",
@@ -130,6 +157,29 @@ describe("AgentPaymasterClient", () => {
 
     expect(quote.quoteId).toBe("abc123");
     expect(quote.supportedTokens).toContain("USDC");
+  });
+
+  it("rejects malformed quote payloads", async () => {
+    const client = new AgentPaymasterClient({
+      apiUrl: "http://localhost:3000",
+      fetchImpl: async () =>
+        makeResponse({
+          quoteId: "abc123",
+          chain: "taikoMainnet",
+          chainId: 167000,
+          token: "USDC",
+        }),
+    });
+
+    await expect(
+      client.getUsdcQuote({
+        entryPoint: ENTRY_POINT,
+        userOperation: SAMPLE_USER_OPERATION,
+      }),
+    ).rejects.toMatchObject<Partial<AgentPaymasterSdkError>>({
+      name: "AgentPaymasterSdkError",
+      code: "invalid_response",
+    });
   });
 
   it("maps rate-limited quote responses to RateLimitError", async () => {

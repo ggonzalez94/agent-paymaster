@@ -30,7 +30,10 @@ const userOp = new UserOperationBuilder({
   maxFeePerGas: "0x100",
   maxPriorityFeePerGas: "0x10",
 })
-  .withSignature("0x")
+  // Provide a non-empty signature. For estimation-only flows, use a 65-byte dummy signature.
+  .withSignature(
+    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b",
+  )
   .build();
 
 const gas = await client.ethEstimateUserOperationGas(userOp, entryPoint);

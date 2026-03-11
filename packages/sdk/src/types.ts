@@ -12,6 +12,8 @@ export interface UserOperation {
   callGasLimit?: HexString;
   verificationGasLimit?: HexString;
   preVerificationGas?: HexString;
+  paymasterVerificationGasLimit?: HexString;
+  paymasterPostOpGasLimit?: HexString;
   maxFeePerGas: HexString;
   maxPriorityFeePerGas: HexString;
   paymasterAndData?: HexString;
@@ -31,7 +33,7 @@ export interface JsonRpcRequest {
   jsonrpc: "2.0";
   id: JsonRpcId;
   method: string;
-  params?: unknown[];
+  params?: unknown;
 }
 
 export interface JsonRpcErrorObject {
@@ -122,5 +124,7 @@ export interface BuildUserOperationInput {
   callGasLimit?: HexString;
   verificationGasLimit?: HexString;
   preVerificationGas?: HexString;
+  paymasterVerificationGasLimit?: HexString;
+  paymasterPostOpGasLimit?: HexString;
   l1DataGas?: HexString;
 }

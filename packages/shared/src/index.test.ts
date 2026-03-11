@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildHealth } from "./index.js";
+import { buildHealth, type RpcConfig } from "./index.js";
 
 describe("buildHealth", () => {
   it("returns an ok status for a service", () => {
@@ -9,5 +9,14 @@ describe("buildHealth", () => {
     expect(result.service).toBe("api");
     expect(result.status).toBe("ok");
     expect(Date.parse(result.timestamp)).not.toBeNaN();
+  });
+
+  it("supports taikoHoodi chain name", () => {
+    const config: RpcConfig = {
+      chain: "taikoHoodi",
+      rpcUrl: "https://rpc.test",
+    };
+
+    expect(config.chain).toBe("taikoHoodi");
   });
 });

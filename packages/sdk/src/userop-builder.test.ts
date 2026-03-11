@@ -4,17 +4,44 @@ import { AgentPaymasterSdkError } from "./errors.js";
 import { UserOperationBuilder, applyPaymasterData, buildUserOperation } from "./userop-builder.js";
 
 describe("user operation builder", () => {
-  it("builds a valid user operation with defaults", () => {
+  it("builds a valid user operation", () => {
     const userOperation = buildUserOperation({
       sender: "0x1111111111111111111111111111111111111111",
       nonce: "0x1",
       callData: "0x1234",
       maxFeePerGas: "0x100",
       maxPriorityFeePerGas: "0x10",
+      signature:
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b",
     });
 
     expect(userOperation.initCode).toBe("0x");
-    expect(userOperation.signature).toBe("0x");
+    expect(userOperation.signature).toMatch(/^0x[0-9a-f]+$/u);
+  });
+
+  it("throws when signature is missing", () => {
+    expect(() =>
+      buildUserOperation({
+        sender: "0x1111111111111111111111111111111111111111",
+        nonce: "0x1",
+        callData: "0x1234",
+        maxFeePerGas: "0x100",
+        maxPriorityFeePerGas: "0x10",
+      }),
+    ).toThrowError(AgentPaymasterSdkError);
+  });
+
+  it("throws when signature is empty", () => {
+    expect(() =>
+      buildUserOperation({
+        sender: "0x1111111111111111111111111111111111111111",
+        nonce: "0x1",
+        callData: "0x1234",
+        maxFeePerGas: "0x100",
+        maxPriorityFeePerGas: "0x10",
+        signature: "0x",
+      }),
+    ).toThrowError(AgentPaymasterSdkError);
   });
 
   it("applies paymaster data from quote payload", () => {
@@ -24,6 +51,8 @@ describe("user operation builder", () => {
       callData: "0x1234",
       maxFeePerGas: "0x100",
       maxPriorityFeePerGas: "0x10",
+      signature:
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b",
     })
       .withGasEstimate({
         callGasLimit: "0x88d8",
@@ -39,6 +68,8 @@ describe("user operation builder", () => {
     const built = builder.build();
 
     expect(built.callGasLimit).toBe("0x88d8");
+    expect(built.paymasterVerificationGasLimit).toBe("0xea60");
+    expect(built.paymasterPostOpGasLimit).toBe("0xafc8");
     expect(built.paymasterAndData).toBe("0x999999999999999999999999999999999999999900");
   });
 
@@ -49,6 +80,8 @@ describe("user operation builder", () => {
       callData: "0x1234",
       maxFeePerGas: "0x100",
       maxPriorityFeePerGas: "0x10",
+      signature:
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b",
     });
 
     const patched = applyPaymasterData(userOperation, {
@@ -69,5 +102,19 @@ describe("user operation builder", () => {
         maxPriorityFeePerGas: "0x10",
       }),
     ).toThrowError(AgentPaymasterSdkError);
+  });
+
+  it("preserves address checksum casing", () => {
+    const userOperation = buildUserOperation({
+      sender: "0x07D83526730c7438048D55A4fC0b850E2Aab6f0B",
+      nonce: "0x1",
+      callData: "0x1234",
+      maxFeePerGas: "0x100",
+      maxPriorityFeePerGas: "0x10",
+      signature:
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b",
+    });
+
+    expect(userOperation.sender).toBe("0x07D83526730c7438048D55A4fC0b850E2Aab6f0B");
   });
 });

@@ -12,11 +12,17 @@ import type {
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PATTERN = /^0x[0-9a-fA-F]*$/;
 
-interface PaymasterDataInput {
-  paymasterAndData?: HexString;
-  paymaster?: Address;
-  paymasterData?: HexString;
-}
+export type PaymasterDataInput =
+  | {
+      paymasterAndData: HexString;
+      paymaster?: never;
+      paymasterData?: never;
+    }
+  | {
+      paymasterAndData?: never;
+      paymaster: Address;
+      paymasterData: HexString;
+    };
 
 const assertHex = (value: string, fieldName: string): HexString => {
   if (!HEX_PATTERN.test(value)) {
@@ -31,7 +37,26 @@ const assertAddress = (value: string, fieldName: string): Address => {
     throw new AgentPaymasterSdkError("invalid_address", `${fieldName} must be a valid address`);
   }
 
-  return value.toLowerCase() as Address;
+  return value as Address;
+};
+
+const assertSignature = (value: string | undefined, fieldName: string): HexString => {
+  if (value === undefined) {
+    throw new AgentPaymasterSdkError(
+      "invalid_signature",
+      `${fieldName} is required. Provide a non-empty signature (use a 65-byte dummy signature for gas estimation).`,
+    );
+  }
+
+  const signature = assertHex(value, fieldName);
+  if (signature === "0x") {
+    throw new AgentPaymasterSdkError(
+      "invalid_signature",
+      `${fieldName} cannot be empty. Provide a non-empty signature (use a 65-byte dummy signature for gas estimation).`,
+    );
+  }
+
+  return signature;
 };
 
 export const buildUserOperation = (input: BuildUserOperationInput): UserOperation => {
@@ -42,7 +67,7 @@ export const buildUserOperation = (input: BuildUserOperationInput): UserOperatio
     callData: assertHex(input.callData, "callData"),
     maxFeePerGas: assertHex(input.maxFeePerGas, "maxFeePerGas"),
     maxPriorityFeePerGas: assertHex(input.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
-    signature: assertHex(input.signature ?? "0x", "signature"),
+    signature: assertSignature(input.signature, "signature"),
   };
 
   if (input.callGasLimit !== undefined) {
@@ -55,6 +80,20 @@ export const buildUserOperation = (input: BuildUserOperationInput): UserOperatio
 
   if (input.preVerificationGas !== undefined) {
     userOperation.preVerificationGas = assertHex(input.preVerificationGas, "preVerificationGas");
+  }
+
+  if (input.paymasterVerificationGasLimit !== undefined) {
+    userOperation.paymasterVerificationGasLimit = assertHex(
+      input.paymasterVerificationGasLimit,
+      "paymasterVerificationGasLimit",
+    );
+  }
+
+  if (input.paymasterPostOpGasLimit !== undefined) {
+    userOperation.paymasterPostOpGasLimit = assertHex(
+      input.paymasterPostOpGasLimit,
+      "paymasterPostOpGasLimit",
+    );
   }
 
   if (input.l1DataGas !== undefined) {
@@ -97,6 +136,11 @@ export class UserOperationBuilder {
       callGasLimit: assertHex(estimate.callGasLimit, "callGasLimit"),
       verificationGasLimit: assertHex(estimate.verificationGasLimit, "verificationGasLimit"),
       preVerificationGas: assertHex(estimate.preVerificationGas, "preVerificationGas"),
+      paymasterVerificationGasLimit: assertHex(
+        estimate.paymasterVerificationGasLimit,
+        "paymasterVerificationGasLimit",
+      ),
+      paymasterPostOpGasLimit: assertHex(estimate.paymasterPostOpGasLimit, "paymasterPostOpGasLimit"),
     };
 
     return this;
@@ -119,7 +163,7 @@ export class UserOperationBuilder {
   withSignature(signature: HexString): this {
     this.draft = {
       ...this.draft,
-      signature: assertHex(signature, "signature"),
+      signature: assertSignature(signature, "signature"),
     };
 
     return this;

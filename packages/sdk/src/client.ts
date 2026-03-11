@@ -21,9 +21,17 @@ import type {
 } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const HEX_PATTERN = /^0x[0-9a-fA-F]*$/;
+const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
+
+const isHexString = (value: unknown): value is string =>
+  typeof value === "string" && HEX_PATTERN.test(value);
+
+const isAddress = (value: unknown): value is string =>
+  typeof value === "string" && ADDRESS_PATTERN.test(value);
 
 const isJsonRpcFailure = (value: unknown): value is JsonRpcFailure => {
   if (!isObject(value)) {
@@ -109,6 +117,40 @@ interface JsonRequestResult {
   body: unknown;
 }
 
+const isQuoteResponse = (value: unknown): value is QuoteResponse => {
+  if (!isObject(value)) {
+    return false;
+  }
+
+  const supportedTokens = value.supportedTokens;
+  const supportedTokensValid =
+    Array.isArray(supportedTokens) &&
+    supportedTokens.every((token) => token === "USDC");
+
+  return (
+    typeof value.quoteId === "string" &&
+    (value.chain === "taikoMainnet" || value.chain === "taikoHekla" || value.chain === "taikoHoodi") &&
+    typeof value.chainId === "number" &&
+    Number.isInteger(value.chainId) &&
+    value.token === "USDC" &&
+    isAddress(value.paymaster) &&
+    isHexString(value.paymasterData) &&
+    isHexString(value.paymasterAndData) &&
+    isHexString(value.paymasterVerificationGasLimit) &&
+    isHexString(value.paymasterPostOpGasLimit) &&
+    isHexString(value.estimatedGasLimit) &&
+    isHexString(value.estimatedGasWei) &&
+    typeof value.maxTokenCostMicros === "string" &&
+    typeof value.maxTokenCost === "string" &&
+    typeof value.validUntil === "number" &&
+    Number.isInteger(value.validUntil) &&
+    isAddress(value.entryPoint) &&
+    isAddress(value.sender) &&
+    isAddress(value.tokenAddress) &&
+    supportedTokensValid
+  );
+};
+
 export class AgentPaymasterClient {
   private readonly apiUrl: string;
   private readonly timeoutMs: number;
@@ -153,14 +195,14 @@ export class AgentPaymasterClient {
   async getUsdcQuote(request: QuoteRequest): Promise<QuoteResponse> {
     const response = await this.postJson("/v1/paymaster/quote", request);
 
-    if (!isObject(response) || typeof response.quoteId !== "string") {
+    if (!isQuoteResponse(response.body)) {
       throw new AgentPaymasterSdkError("invalid_response", "Quote endpoint returned an invalid payload");
     }
 
-    return response as unknown as QuoteResponse;
+    return response.body;
   }
 
-  private async rpc<T>(method: string, params: unknown[]): Promise<T> {
+  private async rpc<T>(method: string, params: unknown): Promise<T> {
     const response = await this.postJson("/rpc", {
       jsonrpc: "2.0",
       id: this.requestId,
@@ -169,18 +211,18 @@ export class AgentPaymasterClient {
     });
     this.requestId += 1;
 
-    if (isJsonRpcFailure(response)) {
-      throw new JsonRpcRequestError(200, response.error);
+    if (isJsonRpcFailure(response.body)) {
+      throw new JsonRpcRequestError(response.status, response.body.error);
     }
 
-    if (!isObject(response) || response.jsonrpc !== "2.0" || !("result" in response)) {
+    if (!isObject(response.body) || response.body.jsonrpc !== "2.0" || !("result" in response.body)) {
       throw new AgentPaymasterSdkError("invalid_response", "JSON-RPC endpoint returned an invalid payload");
     }
 
-    return response.result as T;
+    return response.body.result as T;
   }
 
-  private async postJson(path: string, payload: unknown): Promise<unknown> {
+  private async postJson(path: string, payload: unknown): Promise<JsonRequestResult> {
     const response = await this.request(path, {
       method: "POST",
       headers: {
@@ -190,7 +232,7 @@ export class AgentPaymasterClient {
     });
 
     if (response.status >= 200 && response.status < 300) {
-      return response.body;
+      return response;
     }
 
     if (isJsonRpcFailure(response.body)) {

@@ -63,7 +63,7 @@ const normalizeAddress = (value: string, fieldName: string): Address => {
     throw new AgentPaymasterSdkError("invalid_address", `${fieldName} must be a valid address`);
   }
 
-  return value.toLowerCase() as Address;
+  return value as Address;
 };
 
 const toDecimalString = (
@@ -117,6 +117,20 @@ const splitSignature = (signature: HexString): Pick<PermitSignature, "v" | "r" |
   const r = `0x${signature.slice(2, 66)}` as HexString;
   const s = `0x${signature.slice(66, 130)}` as HexString;
   const vRaw = Number.parseInt(signature.slice(130, 132), 16);
+  if (vRaw >= 35) {
+    throw new AgentPaymasterSdkError(
+      "invalid_signature",
+      "Permit signature includes EIP-155 chain-encoded v. Use an unencoded 27/28 (or 0/1) signature.",
+    );
+  }
+
+  if (vRaw !== 0 && vRaw !== 1 && vRaw !== 27 && vRaw !== 28) {
+    throw new AgentPaymasterSdkError(
+      "invalid_signature",
+      "Permit signature v must be 27/28 (or 0/1).",
+    );
+  }
+
   const v = vRaw >= 27 ? vRaw : vRaw + 27;
 
   return { v, r, s };
