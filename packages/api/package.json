@@ -16,5 +16,9 @@
     "@hono/node-server": "^1.13.8",
     "hono": "^4.7.2",
     "viem": "^2.37.0"
+  },
+  "devDependencies": {
+    "@agent-paymaster/bundler": "workspace:*",
+    "@agent-paymaster/sdk": "workspace:*"
   }
 }
