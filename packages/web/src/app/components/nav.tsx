@@ -19,9 +19,7 @@ export function Nav() {
               <path d="M2 12l10 5 10-5" />
             </svg>
           </div>
-          <span className="text-lg font-bold tracking-tight text-surface-900">
-            Servo
-          </span>
+          <span className="text-lg font-bold tracking-tight text-surface-900">Servo</span>
         </a>
         <div className="hidden items-center gap-8 md:flex">
           <a

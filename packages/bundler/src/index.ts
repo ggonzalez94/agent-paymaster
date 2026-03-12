@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { concatHex, encodeAbiParameters, keccak256, toHex } from "viem";
 
+import { BundlerPersistenceStore } from "./persistence.js";
+
 export type HexString = `0x${string}`;
 export type JsonRpcId = string | number | null;
 
@@ -124,6 +126,30 @@ interface BundlerRpcErrorData {
   method?: string;
   reason?: string;
   [key: string]: unknown;
+}
+
+export interface BundlerPersistence {
+  savePendingOperation(
+    hash: string,
+    entryPoint: string,
+    userOperation: UserOperation,
+    receivedAt: number,
+  ): void;
+  removePendingOperation(hash: string): void;
+  loadPendingOperations(): Array<{
+    hash: string;
+    entryPoint: string;
+    userOperation: UserOperation;
+    receivedAt: number;
+  }>;
+  saveSenderReputation(sender: string, failures: number, bannedUntil: number | null): void;
+  deleteSenderReputation(sender: string): void;
+  loadSenderReputations(): Array<{
+    sender: string;
+    failures: number;
+    bannedUntil: number | null;
+  }>;
+  deleteExpiredSenderReputations(nowMs?: number): void;
 }
 
 interface BundlerConfigInput {
@@ -303,16 +329,16 @@ export class BundlerService {
   private readonly userOperations = new Map<string, StoredUserOperation>();
   private readonly bundles = new Map<string, string[]>();
   private readonly senderReputation = new Map<string, SenderReputation>();
+  private readonly persistence?: BundlerPersistence;
   private bundleSequence = 0;
 
-  constructor(config: BundlerConfigInput = {}) {
+  constructor(config: BundlerConfigInput = {}, persistence?: BundlerPersistence) {
     this.config = {
       chainId: config.chainId ?? 167000,
-      entryPoints:
-        config.entryPoints?.map((entryPoint) => normalizeAddress(entryPoint)) ?? [
-          "0x0000000071727de22e5e9d8baf0edac6f37da032",
-          "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
-        ],
+      entryPoints: config.entryPoints?.map((entryPoint) => normalizeAddress(entryPoint)) ?? [
+        "0x0000000071727de22e5e9d8baf0edac6f37da032",
+        "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
+      ],
       reputationMaxFailures: config.reputationMaxFailures ?? 3,
       banWindowMs: config.banWindowMs ?? 5 * 60 * 1000,
       baseCallGas: config.baseCallGas ?? 35_000n,
@@ -325,6 +351,40 @@ export class BundlerService {
       paymasterVerificationGasLimit: config.paymasterVerificationGasLimit ?? 60_000n,
       paymasterPostOpGasLimit: config.paymasterPostOpGasLimit ?? 45_000n,
     };
+
+    this.persistence = persistence;
+
+    if (persistence) {
+      this.loadFromPersistence(persistence);
+    }
+  }
+
+  private loadFromPersistence(persistence: BundlerPersistence): void {
+    persistence.deleteExpiredSenderReputations();
+
+    for (const entry of persistence.loadPendingOperations()) {
+      this.userOperations.set(entry.hash, {
+        hash: entry.hash,
+        userOperation: entry.userOperation,
+        entryPoint: entry.entryPoint,
+        receivedAt: entry.receivedAt,
+        state: "pending",
+        bundleHash: null,
+        transactionHash: null,
+        blockNumber: null,
+        reason: null,
+        gasUsed: null,
+        gasCost: null,
+        effectiveGasPrice: null,
+      });
+    }
+
+    for (const reputation of persistence.loadSenderReputations()) {
+      this.senderReputation.set(reputation.sender, {
+        failures: reputation.failures,
+        bannedUntil: reputation.bannedUntil,
+      });
+    }
   }
 
   getHealth() {
@@ -368,7 +428,10 @@ export class BundlerService {
     return [...this.config.entryPoints];
   }
 
-  estimateUserOperationGas(userOperationInput: unknown, entryPointInput: unknown): UserOperationGasEstimate {
+  estimateUserOperationGas(
+    userOperationInput: unknown,
+    entryPointInput: unknown,
+  ): UserOperationGasEstimate {
     const userOperation = this.parseUserOperation(userOperationInput);
     const entryPoint = this.parseEntryPoint(entryPointInput);
 
@@ -385,9 +448,12 @@ export class BundlerService {
     const verificationGasLimit =
       userOperation.verificationGasLimit !== undefined
         ? hexToBigInt(userOperation.verificationGasLimit)
-        : this.config.baseVerificationGas + callDataBytes * this.config.perByteVerificationGas + initCodeBytes * 8n;
+        : this.config.baseVerificationGas +
+          callDataBytes * this.config.perByteVerificationGas +
+          initCodeBytes * 8n;
 
-    const taikoDataGas = userOperation.l1DataGas === undefined ? 0n : hexToBigInt(userOperation.l1DataGas);
+    const taikoDataGas =
+      userOperation.l1DataGas === undefined ? 0n : hexToBigInt(userOperation.l1DataGas);
     const preVerificationGas =
       userOperation.preVerificationGas !== undefined
         ? hexToBigInt(userOperation.preVerificationGas)
@@ -436,11 +502,13 @@ export class BundlerService {
       return userOpHash;
     }
 
+    const receivedAt = Date.now();
+
     this.userOperations.set(userOpHash, {
       hash: userOpHash,
       userOperation: parsed.userOperation,
       entryPoint: parsed.entryPoint,
-      receivedAt: Date.now(),
+      receivedAt,
       state: "pending",
       bundleHash: null,
       transactionHash: null,
@@ -450,6 +518,13 @@ export class BundlerService {
       gasCost: null,
       effectiveGasPrice: null,
     });
+
+    this.persistence?.savePendingOperation(
+      userOpHash,
+      parsed.entryPoint,
+      parsed.userOperation,
+      receivedAt,
+    );
 
     return userOpHash;
   }
@@ -470,7 +545,8 @@ export class BundlerService {
       userOperation: operation.userOperation,
       entryPoint: operation.entryPoint,
       transactionHash: operation.transactionHash,
-      blockNumber: operation.blockNumber === null ? null : bigIntToHex(BigInt(operation.blockNumber)),
+      blockNumber:
+        operation.blockNumber === null ? null : bigIntToHex(BigInt(operation.blockNumber)),
       blockHash,
     };
   }
@@ -479,11 +555,18 @@ export class BundlerService {
     const userOpHash = this.parseUserOpHash(userOpHashInput);
     const operation = this.userOperations.get(userOpHash);
 
-    if (!operation || operation.state === "pending" || operation.transactionHash === null || operation.blockNumber === null) {
+    if (
+      !operation ||
+      operation.state === "pending" ||
+      operation.transactionHash === null ||
+      operation.blockNumber === null
+    ) {
       return null;
     }
 
-    const blockHash = this.buildDeterministicHash(`${operation.transactionHash}:${operation.blockNumber}`);
+    const blockHash = this.buildDeterministicHash(
+      `${operation.transactionHash}:${operation.blockNumber}`,
+    );
     const gasUsed = operation.gasUsed ?? 0n;
     const gasCost = operation.gasCost ?? 0n;
 
@@ -557,7 +640,10 @@ export class BundlerService {
     }
 
     const transactionHash = this.parseHash(submissionInput.transactionHash, "transactionHash");
-    if (typeof submissionInput.blockNumber !== "number" || !Number.isInteger(submissionInput.blockNumber)) {
+    if (
+      typeof submissionInput.blockNumber !== "number" ||
+      !Number.isInteger(submissionInput.blockNumber)
+    ) {
       throw new BundlerRpcError(RPC_INVALID_PARAMS, "blockNumber must be an integer", {
         reason: "block_number_invalid",
       });
@@ -574,7 +660,10 @@ export class BundlerService {
           : parseHexField(submissionInput.effectiveGasPrice, "effectiveGasPrice"),
       success: submissionInput.success === undefined ? true : Boolean(submissionInput.success),
       reason: submissionInput.reason === undefined ? undefined : String(submissionInput.reason),
-      revertReason: submissionInput.revertReason === undefined ? undefined : String(submissionInput.revertReason),
+      revertReason:
+        submissionInput.revertReason === undefined
+          ? undefined
+          : String(submissionInput.revertReason),
     };
 
     for (const userOpHash of operationHashes) {
@@ -594,10 +683,14 @@ export class BundlerService {
       operation.state = submission.success ? "included" : "failed";
       operation.transactionHash = submission.transactionHash;
       operation.blockNumber = submission.blockNumber;
-      operation.reason = submission.success ? null : submission.reason ?? submission.revertReason ?? "execution_reverted";
+      operation.reason = submission.success
+        ? null
+        : (submission.reason ?? submission.revertReason ?? "execution_reverted");
       operation.gasUsed = gasUsed;
       operation.gasCost = gasCost;
       operation.effectiveGasPrice = gasPrice;
+
+      this.persistence?.removePendingOperation(userOpHash);
     }
   }
 
@@ -614,6 +707,7 @@ export class BundlerService {
     operation.state = "failed";
     operation.reason = reason;
     this.recordValidationFailure(operation.userOperation.sender);
+    this.persistence?.removePendingOperation(userOpHash);
   }
 
   handleJsonRpc(payload: unknown): JsonRpcResponse {
@@ -631,12 +725,20 @@ export class BundlerService {
           return makeJsonRpcResult(request.id, this.getSupportedEntryPoints());
         }
         case "eth_estimateUserOperationGas": {
-          const [userOperation, entryPoint] = this.parsePositionalParams(request.method, request.params, 2);
+          const [userOperation, entryPoint] = this.parsePositionalParams(
+            request.method,
+            request.params,
+            2,
+          );
           const result = this.estimateUserOperationGas(userOperation, entryPoint);
           return makeJsonRpcResult(request.id, result);
         }
         case "eth_sendUserOperation": {
-          const [userOperation, entryPoint] = this.parsePositionalParams(request.method, request.params, 2);
+          const [userOperation, entryPoint] = this.parsePositionalParams(
+            request.method,
+            request.params,
+            2,
+          );
           const hash = this.sendUserOperation(userOperation, entryPoint);
           return makeJsonRpcResult(request.id, hash);
         }
@@ -664,7 +766,9 @@ export class BundlerService {
     }
   }
 
-  private parseJsonRpcRequest(payload: unknown):
+  private parseJsonRpcRequest(
+    payload: unknown,
+  ):
     | { ok: true; request: JsonRpcRequest }
     | { ok: false; id: JsonRpcId; code: number; message: string; data?: BundlerRpcErrorData } {
     if (!isObject(payload)) {
@@ -719,7 +823,9 @@ export class BundlerService {
     return params;
   }
 
-  private parseSendUserOperationParams(input: SendUserOperationParamsInput): ParsedSendUserOperationParams {
+  private parseSendUserOperationParams(
+    input: SendUserOperationParamsInput,
+  ): ParsedSendUserOperationParams {
     try {
       return {
         userOperation: this.parseUserOperation(input.userOperation),
@@ -768,7 +874,10 @@ export class BundlerService {
       initCode: parseHexField(userOperationInput.initCode, "initCode"),
       callData: parseHexField(userOperationInput.callData, "callData"),
       maxFeePerGas: parseHexField(userOperationInput.maxFeePerGas, "maxFeePerGas"),
-      maxPriorityFeePerGas: parseHexField(userOperationInput.maxPriorityFeePerGas, "maxPriorityFeePerGas"),
+      maxPriorityFeePerGas: parseHexField(
+        userOperationInput.maxPriorityFeePerGas,
+        "maxPriorityFeePerGas",
+      ),
       signature: parseHexField(userOperationInput.signature, "signature"),
     };
 
@@ -783,15 +892,24 @@ export class BundlerService {
     }
 
     if (userOperationInput.verificationGasLimit !== undefined) {
-      userOperation.verificationGasLimit = parseHexField(userOperationInput.verificationGasLimit, "verificationGasLimit");
+      userOperation.verificationGasLimit = parseHexField(
+        userOperationInput.verificationGasLimit,
+        "verificationGasLimit",
+      );
     }
 
     if (userOperationInput.preVerificationGas !== undefined) {
-      userOperation.preVerificationGas = parseHexField(userOperationInput.preVerificationGas, "preVerificationGas");
+      userOperation.preVerificationGas = parseHexField(
+        userOperationInput.preVerificationGas,
+        "preVerificationGas",
+      );
     }
 
     if (userOperationInput.paymasterAndData !== undefined) {
-      userOperation.paymasterAndData = parseHexField(userOperationInput.paymasterAndData, "paymasterAndData");
+      userOperation.paymasterAndData = parseHexField(
+        userOperationInput.paymasterAndData,
+        "paymasterAndData",
+      );
     }
 
     if (userOperationInput.l1DataGas !== undefined) {
@@ -840,7 +958,8 @@ export class BundlerService {
     }
 
     if (reputation.bannedUntil <= Date.now()) {
-      this.senderReputation.set(sender, { failures: 0, bannedUntil: null });
+      this.senderReputation.delete(sender);
+      this.persistence?.deleteSenderReputation(sender);
       return;
     }
 
@@ -859,12 +978,15 @@ export class BundlerService {
 
     const nextFailures = current.failures + 1;
     const bannedUntil =
-      nextFailures >= this.config.reputationMaxFailures ? Date.now() + this.config.banWindowMs : current.bannedUntil;
+      nextFailures >= this.config.reputationMaxFailures
+        ? Date.now() + this.config.banWindowMs
+        : current.bannedUntil;
 
     this.senderReputation.set(sender, {
       failures: nextFailures,
       bannedUntil,
     });
+    this.persistence?.saveSenderReputation(sender, nextFailures, bannedUntil);
   }
 
   private buildUserOpHash(userOperation: UserOperation, entryPoint: HexString): string {
@@ -873,10 +995,15 @@ export class BundlerService {
       "callGasLimit",
     );
     const verificationGasLimit = toUint128(
-      userOperation.verificationGasLimit === undefined ? 0n : hexToBigInt(userOperation.verificationGasLimit),
+      userOperation.verificationGasLimit === undefined
+        ? 0n
+        : hexToBigInt(userOperation.verificationGasLimit),
       "verificationGasLimit",
     );
-    const maxPriorityFeePerGas = toUint128(hexToBigInt(userOperation.maxPriorityFeePerGas), "maxPriorityFeePerGas");
+    const maxPriorityFeePerGas = toUint128(
+      hexToBigInt(userOperation.maxPriorityFeePerGas),
+      "maxPriorityFeePerGas",
+    );
     const maxFeePerGas = toUint128(hexToBigInt(userOperation.maxFeePerGas), "maxFeePerGas");
 
     const accountGasLimits = concatHex([
@@ -905,7 +1032,9 @@ export class BundlerService {
         keccak256(userOperation.initCode),
         keccak256(userOperation.callData),
         accountGasLimits,
-        userOperation.preVerificationGas === undefined ? 0n : hexToBigInt(userOperation.preVerificationGas),
+        userOperation.preVerificationGas === undefined
+          ? 0n
+          : hexToBigInt(userOperation.preVerificationGas),
         gasFees,
         keccak256(userOperation.paymasterAndData ?? "0x"),
       ],
@@ -923,7 +1052,10 @@ export class BundlerService {
     return `0x${createHash("sha256").update(input).digest("hex")}`;
   }
 
-  private findPendingOperationBySenderAndNonce(sender: string, nonce: bigint): StoredUserOperation | null {
+  private findPendingOperationBySenderAndNonce(
+    sender: string,
+    nonce: bigint,
+  ): StoredUserOperation | null {
     for (const operation of this.userOperations.values()) {
       if (operation.state !== "pending") {
         continue;
@@ -964,7 +1096,9 @@ export const createBundlerApp = (service = new BundlerService()): Hono => {
 };
 
 if (process.env.NODE_ENV !== "test") {
-  const app = createBundlerApp();
+  const persistence = new BundlerPersistenceStore();
+  const service = new BundlerService({}, persistence);
+  const app = createBundlerApp(service);
   const port = Number.parseInt(process.env.BUNDLER_PORT ?? "3001", 10);
 
   serve({

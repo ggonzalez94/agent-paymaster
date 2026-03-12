@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { buildHealth } from "@agent-paymaster/shared";
 import { Hono } from "hono";
@@ -8,6 +8,7 @@ import { logEvent } from "./logger.js";
 import { MetricsRegistry } from "./metrics.js";
 import { openApiDocument } from "./openapi.js";
 import { PaymasterService, type PaymasterServiceConfigInput } from "./paymaster-service.js";
+import type { PersistenceStore } from "./persistence.js";
 import { FixedWindowRateLimiter, type RateLimitResult } from "./rate-limit.js";
 import {
   type JsonRpcId,
@@ -42,10 +43,12 @@ export interface CreateAppOptions {
   paymasterService?: PaymasterService;
   metrics?: MetricsRegistry;
   rateLimiter?: FixedWindowRateLimiter;
+  persistence?: PersistenceStore;
 }
 
 const DEFAULT_BUNDLER_RPC_URL = "http://127.0.0.1:3001/rpc";
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/u;
 
 const parseIntWithFallback = (value: string | undefined, fallback: number): number => {
   if (value === undefined) {
@@ -109,12 +112,65 @@ const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig 
       quoteTtlSeconds: parseIntWithFallback(environment.PAYMASTER_QUOTE_TTL_SECONDS, 90),
       usdcPerEthMicros: parseBigIntWithFallback(environment.USDC_PER_ETH_MICROS, 0n),
       surchargeBps: parseIntWithFallback(environment.PAYMASTER_SURCHARGE_BPS, 500),
-      quoteSignerPrivateKey:
-        (environment.PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY as `0x${string}` | undefined) ??
-        (`0x${randomBytes(32).toString("hex")}` as `0x${string}`),
+      quoteSignerPrivateKey: environment.PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY as
+        | `0x${string}`
+        | undefined,
       tokenAddresses,
     },
   };
+};
+
+export const validateConfig = (environment: NodeJS.ProcessEnv = process.env): void => {
+  const config = resolveConfig(environment);
+  const errors: string[] = [];
+  const configuredTokenAddresses = [
+    ["USDC_MAINNET_ADDRESS", environment.USDC_MAINNET_ADDRESS],
+    ["USDC_HEKLA_ADDRESS", environment.USDC_HEKLA_ADDRESS],
+    ["USDC_HOODI_ADDRESS", environment.USDC_HOODI_ADDRESS],
+  ];
+
+  if (environment.PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY === undefined) {
+    errors.push("PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY is required");
+  } else if (!PRIVATE_KEY_PATTERN.test(environment.PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY)) {
+    errors.push("PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY must be a 32-byte hex private key");
+  }
+
+  if (environment.PAYMASTER_ADDRESS === undefined) {
+    errors.push("PAYMASTER_ADDRESS is required");
+  } else if (!ADDRESS_PATTERN.test(environment.PAYMASTER_ADDRESS)) {
+    errors.push("PAYMASTER_ADDRESS must be a valid 20-byte hex address");
+  }
+
+  if (environment.USDC_PER_ETH_MICROS === undefined) {
+    errors.push("USDC_PER_ETH_MICROS is required");
+  } else if (!config.paymaster.usdcPerEthMicros || config.paymaster.usdcPerEthMicros <= 0n) {
+    errors.push("USDC_PER_ETH_MICROS must be greater than 0");
+  }
+
+  let validTokenAddressCount = 0;
+  for (const [name, value] of configuredTokenAddresses) {
+    if (value === undefined) {
+      continue;
+    }
+
+    if (!ADDRESS_PATTERN.test(value)) {
+      errors.push(`${name} must be a valid 20-byte hex address`);
+      continue;
+    }
+
+    validTokenAddressCount += 1;
+  }
+
+  if (validTokenAddressCount === 0) {
+    errors.push("At least one USDC_*_ADDRESS must be configured");
+  }
+
+  if (errors.length > 0) {
+    for (const e of errors) {
+      logEvent("error", "config.invalid", { detail: e });
+    }
+    throw new Error(`Missing required configuration:\n  - ${errors.join("\n  - ")}`);
+  }
 };
 
 const getClientIdentifier = (headerValue: string | undefined): string | null => {
@@ -227,6 +283,7 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
   const mergedConfig = mergeConfig(resolveConfig(), options.config);
 
   const metrics = options.metrics ?? new MetricsRegistry();
+  const persistence = options.persistence;
   const bundlerClient =
     options.bundlerClient ??
     new HttpBundlerClient({
@@ -240,10 +297,13 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
 
   const rateLimiter =
     options.rateLimiter ??
-    new FixedWindowRateLimiter({
-      maxRequestsPerWindow: mergedConfig.rateLimit.maxRequestsPerWindow,
-      windowMs: mergedConfig.rateLimit.windowMs,
-    });
+    new FixedWindowRateLimiter(
+      {
+        maxRequestsPerWindow: mergedConfig.rateLimit.maxRequestsPerWindow,
+        windowMs: mergedConfig.rateLimit.windowMs,
+      },
+      persistence,
+    );
 
   const app = new Hono();
 
@@ -444,8 +504,14 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
     }
 
     try {
-      const quote = await paymasterService.quote(body);
+      const quoteKey = paymasterService.buildQuoteRequestKey(body);
+      const cachedQuote = persistence?.getIssuedQuote(quoteKey);
+      const quote = cachedQuote ?? (await paymasterService.quote(body));
+
       metrics.recordQuote(quote.chain, "ok");
+      if (cachedQuote === null || cachedQuote === undefined) {
+        persistence?.saveIssuedQuote(quoteKey, quote);
+      }
 
       const result = c.json({
         ...quote,

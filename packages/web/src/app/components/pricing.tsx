@@ -18,14 +18,11 @@ export function Pricing() {
               Free tier
             </div>
             <div className="mt-4 flex items-baseline gap-1">
-              <span className="text-4xl font-extrabold text-surface-900">
-                $0
-              </span>
+              <span className="text-4xl font-extrabold text-surface-900">$0</span>
               <span className="text-surface-500">/month</span>
             </div>
             <p className="mt-4 text-sm text-surface-500">
-              Get started without a credit card. Perfect for testing and
-              low-volume agents.
+              Get started without a credit card. Perfect for testing and low-volume agents.
             </p>
             <ul className="mt-8 space-y-3">
               {[
@@ -69,14 +66,12 @@ export function Pricing() {
               Standard
             </div>
             <div className="mt-4 flex items-baseline gap-1">
-              <span className="text-4xl font-extrabold text-surface-900">
-                5%
-              </span>
+              <span className="text-4xl font-extrabold text-surface-900">5%</span>
               <span className="text-surface-500">gas surcharge</span>
             </div>
             <p className="mt-4 text-sm text-surface-500">
-              Pay-per-use after the free tier. Settled on-chain in USDC — no
-              invoices, no billing cycles.
+              Pay-per-use after the free tier. Settled on-chain in USDC — no invoices, no billing
+              cycles.
             </p>
             <ul className="mt-8 space-y-3">
               {[

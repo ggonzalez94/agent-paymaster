@@ -29,8 +29,8 @@ export function Hero() {
 
         {/* Subheadline */}
         <p className="mx-auto mt-6 max-w-xl text-center text-lg leading-relaxed text-surface-500 md:text-xl">
-          The agent-native ERC-4337 paymaster and bundler for Taiko. Your agents
-          pay gas in USDC — no ETH, no bridging, no setup.
+          The agent-native ERC-4337 paymaster and bundler for Taiko. Your agents pay gas in USDC —
+          no ETH, no bridging, no setup.
         </p>
 
         {/* CTAs */}
@@ -71,9 +71,7 @@ export function Hero() {
             { value: "~2s", label: "Confirmation time" },
           ].map((stat) => (
             <div key={stat.label} className="text-center">
-              <div className="text-2xl font-bold text-surface-900 md:text-3xl">
-                {stat.value}
-              </div>
+              <div className="text-2xl font-bold text-surface-900 md:text-3xl">{stat.value}</div>
               <div className="mt-1 text-sm text-surface-500">{stat.label}</div>
             </div>
           ))}

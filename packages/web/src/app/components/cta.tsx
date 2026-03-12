@@ -14,8 +14,8 @@ export function Cta() {
               Ready to build on Taiko?
             </h2>
             <p className="mx-auto mt-4 max-w-lg text-lg text-surface-500">
-              Start sending gasless UserOperations in minutes. Free tier
-              included — no signup required.
+              Start sending gasless UserOperations in minutes. Free tier included — no signup
+              required.
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
               <a

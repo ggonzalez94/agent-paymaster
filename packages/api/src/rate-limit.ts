@@ -1,3 +1,5 @@
+import type { PersistenceStore } from "./persistence.js";
+
 export interface RateLimitResult {
   allowed: boolean;
   limit: number;
@@ -25,9 +27,10 @@ const DEFAULT_CONFIG: FixedWindowRateLimiterConfig = {
 export class FixedWindowRateLimiter {
   private readonly buckets = new Map<string, FixedWindowBucket>();
   private readonly config: FixedWindowRateLimiterConfig;
+  private readonly persistence?: PersistenceStore;
   private operationCount = 0;
 
-  constructor(config: Partial<FixedWindowRateLimiterConfig> = {}) {
+  constructor(config: Partial<FixedWindowRateLimiterConfig> = {}, persistence?: PersistenceStore) {
     const merged = {
       ...DEFAULT_CONFIG,
       ...config,
@@ -47,12 +50,33 @@ export class FixedWindowRateLimiter {
           ? merged.maxBuckets
           : DEFAULT_CONFIG.maxBuckets,
     };
+
+    this.persistence = persistence;
+
+    if (persistence) {
+      this.loadFromPersistence(persistence);
+    }
+  }
+
+  private loadFromPersistence(persistence: PersistenceStore): void {
+    const now = Date.now();
+    persistence.deleteExpiredRateLimitBuckets(this.config.windowMs);
+
+    for (const row of persistence.getAllRateLimitBuckets()) {
+      if (now < row.windowStart + this.config.windowMs) {
+        this.buckets.set(row.key, {
+          windowStartMs: row.windowStart,
+          count: row.count,
+        });
+      }
+    }
   }
 
   private sweepExpired(nowMs: number): void {
     for (const [bucketKey, bucket] of this.buckets.entries()) {
       if (nowMs >= bucket.windowStartMs + this.config.windowMs) {
         this.buckets.delete(bucketKey);
+        this.persistence?.deleteRateLimitBucket(bucketKey);
       }
     }
   }
@@ -70,6 +94,7 @@ export class FixedWindowRateLimiter {
 
     if (oldestKey !== null) {
       this.buckets.delete(oldestKey);
+      this.persistence?.deleteRateLimitBucket(oldestKey);
     }
   }
 
@@ -89,14 +114,17 @@ export class FixedWindowRateLimiter {
 
   consume(key: string, nowMs = Date.now()): RateLimitResult {
     this.enforceCapacity(key, nowMs);
+
     const existing = this.buckets.get(key);
 
     if (existing === undefined || nowMs >= existing.windowStartMs + this.config.windowMs) {
       const nextWindowStart = nowMs;
-      this.buckets.set(key, {
+      const nextBucket = {
         windowStartMs: nextWindowStart,
         count: 1,
-      });
+      };
+      this.buckets.set(key, nextBucket);
+      this.persistence?.setRateLimitBucket(key, nextBucket.count, nextBucket.windowStartMs);
 
       return {
         allowed: true,
@@ -116,6 +144,7 @@ export class FixedWindowRateLimiter {
     }
 
     existing.count += 1;
+    this.persistence?.setRateLimitBucket(key, existing.count, existing.windowStartMs);
 
     return {
       allowed: true,

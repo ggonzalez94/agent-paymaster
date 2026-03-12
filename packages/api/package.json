@@ -14,11 +14,13 @@
   "dependencies": {
     "@agent-paymaster/shared": "workspace:*",
     "@hono/node-server": "^1.13.8",
+    "better-sqlite3": "^12.6.2",
     "hono": "^4.7.2",
     "viem": "^2.37.0"
   },
   "devDependencies": {
     "@agent-paymaster/bundler": "workspace:*",
-    "@agent-paymaster/sdk": "workspace:*"
+    "@agent-paymaster/sdk": "workspace:*",
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

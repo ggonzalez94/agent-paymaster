@@ -20,9 +20,7 @@ export function Footer() {
                 <path d="M2 12l10 5 10-5" />
               </svg>
             </div>
-            <span className="text-sm font-semibold text-surface-700">
-              Servo
-            </span>
+            <span className="text-sm font-semibold text-surface-700">Servo</span>
           </div>
           <div className="flex items-center gap-6">
             <a
@@ -44,9 +42,7 @@ export function Footer() {
               Status
             </a>
           </div>
-          <p className="text-xs text-surface-400">
-            Built on Taiko Alethia. Powered by ERC-4337.
-          </p>
+          <p className="text-xs text-surface-400">Built on Taiko Alethia. Powered by ERC-4337.</p>
         </div>
       </div>
     </footer>

@@ -3,4 +3,7 @@ dist
 coverage
 packages/paymaster-contracts/artifacts
 packages/paymaster-contracts/cache
+packages/paymaster-contracts/cache_forge
+packages/paymaster-contracts/lib
+packages/paymaster-contracts/out
 pnpm-lock.yaml

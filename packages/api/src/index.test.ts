@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { BundlerClient } from "./bundler-client.js";
-import { createApp } from "./index.js";
+import { createApp, validateConfig } from "./index.js";
+import type { PaymasterQuote } from "./paymaster-service.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "./types.js";
 
 const ENTRY_POINT_V08 = "0x0000000071727de22e5e9d8baf0edac6f37da032";
 const TEST_QUOTE_SIGNER_PRIVATE_KEY = `0x${"2".repeat(64)}` as const;
+const TEST_PAYMASTER_ADDRESS = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const TEST_TOKEN_ADDRESS = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 const SAMPLE_USER_OPERATION = {
   sender: "0x1111111111111111111111111111111111111111",
@@ -85,6 +88,18 @@ class MissingPaymasterGasBundlerClient extends FakeBundlerClient {
   }
 }
 
+class FakePersistenceStore {
+  readonly issuedQuotes = new Map<string, PaymasterQuote>();
+
+  getIssuedQuote(quoteKey: string): PaymasterQuote | null {
+    return this.issuedQuotes.get(quoteKey) ?? null;
+  }
+
+  saveIssuedQuote(quoteKey: string, quote: PaymasterQuote): void {
+    this.issuedQuotes.set(quoteKey, quote);
+  }
+}
+
 const createTestApp = (
   bundlerClient: BundlerClient,
   options: {
@@ -98,6 +113,12 @@ const createTestApp = (
       paymaster: {
         usdcPerEthMicros: 3_000_000_000n,
         quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+        paymasterAddress: TEST_PAYMASTER_ADDRESS,
+        tokenAddresses: {
+          taikoMainnet: TEST_TOKEN_ADDRESS,
+          taikoHekla: TEST_TOKEN_ADDRESS,
+          taikoHoodi: TEST_TOKEN_ADDRESS,
+        },
       },
     },
   });
@@ -366,5 +387,139 @@ describe("api gateway", () => {
     expect(payload.paymaster.usdcPerEth).toBeUndefined();
     expect(payload.paymaster.tokenAddresses).toBeUndefined();
     expect(payload.paymaster.surchargeBps).toBeUndefined();
+  });
+
+  it("reuses persisted quotes across app restarts", async () => {
+    const persistence = new FakePersistenceStore();
+    const firstBundlerClient = new FakeBundlerClient();
+    const firstApp = createApp({
+      bundlerClient: firstBundlerClient,
+      persistence: persistence as never,
+      rateLimiter: new FixedWindowRateLimiter({
+        maxRequestsPerWindow: 10,
+        windowMs: 120_000,
+      }),
+      config: {
+        paymaster: {
+          usdcPerEthMicros: 3_000_000_000n,
+          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+          paymasterAddress: TEST_PAYMASTER_ADDRESS,
+          tokenAddresses: {
+            taikoMainnet: TEST_TOKEN_ADDRESS,
+          },
+        },
+      },
+    });
+
+    const requestBody = {
+      chain: "taikoMainnet",
+      entryPoint: ENTRY_POINT_V08,
+      token: "USDC",
+      userOperation: SAMPLE_USER_OPERATION,
+    };
+
+    const firstResponse = await firstApp.request("/v1/paymaster/quote", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    expect(firstResponse.status).toBe(200);
+    const firstPayload = await firstResponse.json();
+    expect(
+      firstBundlerClient.rpcCalls.filter((call) => call.method === "eth_estimateUserOperationGas"),
+    ).toHaveLength(1);
+
+    const secondBundlerClient = new FakeBundlerClient();
+    const secondApp = createApp({
+      bundlerClient: secondBundlerClient,
+      persistence: persistence as never,
+      rateLimiter: new FixedWindowRateLimiter({
+        maxRequestsPerWindow: 10,
+        windowMs: 120_000,
+      }),
+      config: {
+        paymaster: {
+          usdcPerEthMicros: 3_000_000_000n,
+          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+          paymasterAddress: TEST_PAYMASTER_ADDRESS,
+          tokenAddresses: {
+            taikoMainnet: TEST_TOKEN_ADDRESS,
+          },
+        },
+      },
+    });
+
+    const secondResponse = await secondApp.request("/v1/paymaster/quote", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    expect(secondResponse.status).toBe(200);
+    const secondPayload = await secondResponse.json();
+    expect(secondPayload.quoteId).toBe(firstPayload.quoteId);
+    expect(
+      secondBundlerClient.rpcCalls.filter((call) => call.method === "eth_estimateUserOperationGas"),
+    ).toHaveLength(0);
+  });
+
+  it("rejects quotes for chains that are not configured", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createApp({
+      bundlerClient,
+      config: {
+        paymaster: {
+          usdcPerEthMicros: 3_000_000_000n,
+          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+          paymasterAddress: TEST_PAYMASTER_ADDRESS,
+          tokenAddresses: {
+            taikoMainnet: TEST_TOKEN_ADDRESS,
+          },
+        },
+      },
+    });
+
+    const response = await app.request("/v1/paymaster/quote", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chain: "taikoHekla",
+        entryPoint: ENTRY_POINT_V08,
+        token: "USDC",
+        userOperation: SAMPLE_USER_OPERATION,
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    const payload = await response.json();
+    expect(payload.error.code).toBe("quote_generation_failed");
+  });
+
+  it("accepts config with a single valid chain token address", () => {
+    expect(() =>
+      validateConfig({
+        PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+        PAYMASTER_ADDRESS: TEST_PAYMASTER_ADDRESS,
+        USDC_PER_ETH_MICROS: "3000000000",
+        USDC_MAINNET_ADDRESS: TEST_TOKEN_ADDRESS,
+      } as NodeJS.ProcessEnv),
+    ).not.toThrow();
+  });
+
+  it("rejects config with no chain token addresses", () => {
+    expect(() =>
+      validateConfig({
+        PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+        PAYMASTER_ADDRESS: TEST_PAYMASTER_ADDRESS,
+        USDC_PER_ETH_MICROS: "3000000000",
+      } as NodeJS.ProcessEnv),
+    ).toThrow("At least one USDC_*_ADDRESS must be configured");
   });
 });

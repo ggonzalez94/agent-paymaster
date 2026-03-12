@@ -6,10 +6,7 @@ export {
   RateLimitError,
   TransportError,
 } from "./errors.js";
-export {
-  buildPermitTypedData,
-  createPermitSignature,
-} from "./permit.js";
+export { buildPermitTypedData, createPermitSignature } from "./permit.js";
 export { UserOperationBuilder, applyPaymasterData, buildUserOperation } from "./userop-builder.js";
 
 export type {

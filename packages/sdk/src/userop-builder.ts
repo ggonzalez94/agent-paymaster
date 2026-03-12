@@ -75,7 +75,10 @@ export const buildUserOperation = (input: BuildUserOperationInput): UserOperatio
   }
 
   if (input.verificationGasLimit !== undefined) {
-    userOperation.verificationGasLimit = assertHex(input.verificationGasLimit, "verificationGasLimit");
+    userOperation.verificationGasLimit = assertHex(
+      input.verificationGasLimit,
+      "verificationGasLimit",
+    );
   }
 
   if (input.preVerificationGas !== undefined) {
@@ -118,7 +121,10 @@ const resolvePaymasterAndData = (input: PaymasterDataInput): HexString => {
   );
 };
 
-export const applyPaymasterData = (userOperation: UserOperation, input: PaymasterDataInput): UserOperation => ({
+export const applyPaymasterData = (
+  userOperation: UserOperation,
+  input: PaymasterDataInput,
+): UserOperation => ({
   ...userOperation,
   paymasterAndData: resolvePaymasterAndData(input),
 });
@@ -140,7 +146,10 @@ export class UserOperationBuilder {
         estimate.paymasterVerificationGasLimit,
         "paymasterVerificationGasLimit",
       ),
-      paymasterPostOpGasLimit: assertHex(estimate.paymasterPostOpGasLimit, "paymasterPostOpGasLimit"),
+      paymasterPostOpGasLimit: assertHex(
+        estimate.paymasterPostOpGasLimit,
+        "paymasterPostOpGasLimit",
+      ),
     };
 
     return this;

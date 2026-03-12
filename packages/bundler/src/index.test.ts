@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 
-import { BundlerService, createBundlerApp, type UserOperation } from "./index.js";
+import {
+  BundlerService,
+  createBundlerApp,
+  type BundlerPersistence,
+  type UserOperation,
+} from "./index.js";
 
 const ENTRY_POINT_V08 = "0x0000000071727de22e5e9d8baf0edac6f37da032";
 const ENTRY_POINT_V07 = "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789";
@@ -19,8 +24,78 @@ const buildUserOperation = (overrides: Partial<UserOperation> = {}): UserOperati
 
 const isErrorResponse = (
   response: ReturnType<BundlerService["handleJsonRpc"]>,
-): response is { jsonrpc: "2.0"; id: string | number | null; error: { code: number; message: string } } =>
-  "error" in response;
+): response is {
+  jsonrpc: "2.0";
+  id: string | number | null;
+  error: { code: number; message: string };
+} => "error" in response;
+
+class FakeBundlerPersistence implements BundlerPersistence {
+  readonly pendingOperations = new Map<
+    string,
+    {
+      entryPoint: string;
+      userOperation: UserOperation;
+      receivedAt: number;
+    }
+  >();
+  readonly senderReputations = new Map<string, { failures: number; bannedUntil: number | null }>();
+
+  savePendingOperation(
+    hash: string,
+    entryPoint: string,
+    userOperation: UserOperation,
+    receivedAt: number,
+  ): void {
+    this.pendingOperations.set(hash, {
+      entryPoint,
+      userOperation,
+      receivedAt,
+    });
+  }
+
+  removePendingOperation(hash: string): void {
+    this.pendingOperations.delete(hash);
+  }
+
+  loadPendingOperations(): Array<{
+    hash: string;
+    entryPoint: string;
+    userOperation: UserOperation;
+    receivedAt: number;
+  }> {
+    return [...this.pendingOperations.entries()].map(([hash, value]) => ({
+      hash,
+      entryPoint: value.entryPoint,
+      userOperation: value.userOperation,
+      receivedAt: value.receivedAt,
+    }));
+  }
+
+  saveSenderReputation(sender: string, failures: number, bannedUntil: number | null): void {
+    this.senderReputations.set(sender, { failures, bannedUntil });
+  }
+
+  deleteSenderReputation(sender: string): void {
+    this.senderReputations.delete(sender);
+  }
+
+  loadSenderReputations(): Array<{ sender: string; failures: number; bannedUntil: number | null }> {
+    return [...this.senderReputations.entries()].map(([sender, value]) => ({
+      sender,
+      failures: value.failures,
+      bannedUntil: value.bannedUntil,
+    }));
+  }
+
+  deleteExpiredSenderReputations(nowMs: number = Date.now()): void {
+    for (const [sender, reputation] of this.senderReputations.entries()) {
+      if (reputation.bannedUntil !== null && reputation.bannedUntil <= nowMs) {
+        this.senderReputations.delete(sender);
+      }
+    }
+  }
+}
 
 describe("BundlerService", () => {
   let service: BundlerService;
@@ -116,7 +191,10 @@ describe("BundlerService", () => {
     service.sendUserOperation(buildUserOperation(), ENTRY_POINT_V08);
 
     expect(() =>
-      service.sendUserOperation(buildUserOperation({ nonce: "0x01", callData: "0xabcd" }), ENTRY_POINT_V08),
+      service.sendUserOperation(
+        buildUserOperation({ nonce: "0x01", callData: "0xabcd" }),
+        ENTRY_POINT_V08,
+      ),
     ).toThrow("Conflicting pending operation");
   });
 
@@ -211,6 +289,59 @@ describe("BundlerService", () => {
     if (isErrorResponse(bannedResponse)) {
       expect(bannedResponse.error.code).toBe(-32001);
     }
+  });
+
+  it("reloads pending operations and sender bans from persistence", () => {
+    const persistence = new FakeBundlerPersistence();
+    const firstService = new BundlerService(
+      {
+        chainId: 167000,
+        entryPoints: [ENTRY_POINT_V08, ENTRY_POINT_V07],
+        reputationMaxFailures: 3,
+        banWindowMs: 60_000,
+      },
+      persistence,
+    );
+
+    const pendingUserOp = buildUserOperation({ nonce: "0x99" });
+    const pendingHash = firstService.sendUserOperation(pendingUserOp, ENTRY_POINT_V08);
+
+    const invalidUserOp = {
+      sender: "0x2222222222222222222222222222222222222222",
+      callData: "0x1234",
+    };
+
+    for (let index = 0; index < 3; index += 1) {
+      firstService.handleJsonRpc({
+        jsonrpc: "2.0",
+        id: index,
+        method: "eth_sendUserOperation",
+        params: [invalidUserOp, ENTRY_POINT_V08],
+      });
+    }
+
+    const secondService = new BundlerService(
+      {
+        chainId: 167000,
+        entryPoints: [ENTRY_POINT_V08, ENTRY_POINT_V07],
+        reputationMaxFailures: 3,
+        banWindowMs: 60_000,
+      },
+      persistence,
+    );
+
+    expect(secondService.getUserOperationByHash(pendingHash)?.entryPoint).toBe(ENTRY_POINT_V08);
+    expect(secondService.getPendingUserOperationsCount()).toBe(1);
+
+    expect(() =>
+      secondService.sendUserOperation(
+        buildUserOperation({
+          sender: "0x2222222222222222222222222222222222222222",
+          nonce: "0x10",
+        }),
+        ENTRY_POINT_V08,
+      ),
+    ).toThrow("Sender is temporarily banned");
   });
 
   it("returns json-rpc method not found for unknown methods", () => {

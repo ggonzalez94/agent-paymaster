@@ -16,7 +16,11 @@ const SAMPLE_USER_OPERATION: UserOperation = {
   signature: "0x",
 };
 
-const makeResponse = (body: unknown, status = 200, headers: Record<string, string> = {}): Response =>
+const makeResponse = (
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): Response =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -79,9 +83,9 @@ describe("AgentPaymasterClient", () => {
         ),
     });
 
-    await expect(client.ethSendUserOperation(SAMPLE_USER_OPERATION, ENTRY_POINT)).rejects.toMatchObject<
-      Partial<JsonRpcRequestError>
-    >({
+    await expect(
+      client.ethSendUserOperation(SAMPLE_USER_OPERATION, ENTRY_POINT),
+    ).rejects.toMatchObject<Partial<JsonRpcRequestError>>({
       name: "JsonRpcRequestError",
       rpcCode: -32602,
       message: "Missing required positional params",
@@ -106,9 +110,9 @@ describe("AgentPaymasterClient", () => {
         ),
     });
 
-    await expect(client.ethSendUserOperation(SAMPLE_USER_OPERATION, ENTRY_POINT)).rejects.toMatchObject<
-      Partial<JsonRpcRequestError>
-    >({
+    await expect(
+      client.ethSendUserOperation(SAMPLE_USER_OPERATION, ENTRY_POINT),
+    ).rejects.toMatchObject<Partial<JsonRpcRequestError>>({
       name: "JsonRpcRequestError",
       rpcCode: -32000,
       message: "Upstream unavailable",

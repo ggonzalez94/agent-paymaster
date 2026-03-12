@@ -36,9 +36,8 @@ export function CodeExample() {
               <span className="text-surface-500">to integrate.</span>
             </h2>
             <p className="mt-6 text-lg leading-relaxed text-surface-500">
-              Three function calls. Get a quote, build the operation, send it.
-              Our SDK handles paymaster signatures, gas estimation, and permit
-              construction under the hood.
+              Three function calls. Get a quote, build the operation, send it. Our SDK handles
+              paymaster signatures, gas estimation, and permit construction under the hood.
             </p>
             <div className="mt-8 space-y-4">
               {[
@@ -75,9 +74,7 @@ export function CodeExample() {
                 <div className="h-3 w-3 rounded-full bg-surface-300/50" />
                 <div className="h-3 w-3 rounded-full bg-surface-300/50" />
                 <div className="h-3 w-3 rounded-full bg-surface-300/50" />
-                <span className="ml-3 text-xs font-medium text-surface-400">
-                  agent.ts
-                </span>
+                <span className="ml-3 text-xs font-medium text-surface-400">agent.ts</span>
               </div>
               {/* Code */}
               <pre className="overflow-x-auto p-6 text-[13px] leading-relaxed">

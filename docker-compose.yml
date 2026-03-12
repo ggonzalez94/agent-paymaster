@@ -1,22 +1,26 @@
 services:
   api:
     build: .
-    command: pnpm --filter @agent-paymaster/api dev
     ports:
       - "3000:3000"
     env_file:
       - .env
+    environment:
+      HEALTHCHECK_URL: http://localhost:3000/health
     volumes:
-      - .:/app
-      - /app/node_modules
+      - servo-data:/app/data
 
   bundler:
     build: .
-    command: pnpm --filter @agent-paymaster/bundler dev
+    command: ["node", "packages/bundler/dist/index.js"]
     ports:
       - "3001:3001"
     env_file:
       - .env
+    environment:
+      HEALTHCHECK_URL: http://localhost:3001/health
     volumes:
-      - .:/app
-      - /app/node_modules
+      - servo-data:/app/data
+
+volumes:
+  servo-data:

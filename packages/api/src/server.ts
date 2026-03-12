@@ -1,8 +1,12 @@
 import { serve } from "@hono/node-server";
 
-import { createApp } from "./index.js";
+import { createApp, validateConfig } from "./index.js";
+import { PersistenceStore } from "./persistence.js";
 
-const app = createApp();
+validateConfig();
+
+const persistence = new PersistenceStore();
+const app = createApp({ persistence });
 const port = Number.parseInt(process.env.API_PORT ?? "3000", 10);
 
 serve({

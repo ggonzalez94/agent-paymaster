@@ -113,7 +113,10 @@ export class MetricsRegistry {
     const lines: string[] = [];
     const counterMetadata: Array<{ name: string; help: string }> = [
       { name: "api_http_requests_total", help: "Total HTTP requests handled by API gateway" },
-      { name: "api_jsonrpc_requests_total", help: "Total JSON-RPC requests handled by API gateway" },
+      {
+        name: "api_jsonrpc_requests_total",
+        help: "Total JSON-RPC requests handled by API gateway",
+      },
       { name: "api_rate_limit_hits_total", help: "Total requests rejected by rate limiting" },
       { name: "api_paymaster_quotes_total", help: "Total paymaster quote attempts" },
     ];

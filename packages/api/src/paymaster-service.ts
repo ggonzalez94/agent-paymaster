@@ -151,7 +151,7 @@ export interface PaymasterServiceConfig {
   quoteSignerPrivateKey: `0x${string}`;
   defaultPaymasterVerificationGasLimit: bigint;
   defaultPaymasterPostOpGasLimit: bigint;
-  tokenAddresses: Record<ChainName, string>;
+  tokenAddresses: Partial<Record<ChainName, string>>;
 }
 
 export type PaymasterServiceConfigInput = Omit<
@@ -161,20 +161,12 @@ export type PaymasterServiceConfigInput = Omit<
   tokenAddresses?: Partial<Record<ChainName, string>>;
 };
 
-export const DEFAULT_PAYMASTER_CONFIG: PaymasterServiceConfig = {
-  paymasterAddress: "0x9999999999999999999999999999999999999999",
+const OPERATIONAL_DEFAULTS = {
   quoteTtlSeconds: 90,
-  usdcPerEthMicros: 0n,
   surchargeBps: 500,
-  quoteSignerPrivateKey: `0x${"1".repeat(64)}`,
   defaultPaymasterVerificationGasLimit: 60_000n,
   defaultPaymasterPostOpGasLimit: 45_000n,
-  tokenAddresses: {
-    taikoMainnet: "0x07d83526730c7438048d55a4fc0b850e2aab6f0b",
-    taikoHekla: "0x07d83526730c7438048d55a4fc0b850e2aab6f0b",
-    taikoHoodi: "0x07d83526730c7438048d55a4fc0b850e2aab6f0b",
-  },
-};
+} as const;
 
 const normalizeAddress = (value: unknown, fieldName: string): string => {
   if (typeof value !== "string" || !ADDRESS_PATTERN.test(value)) {
@@ -262,6 +254,35 @@ const resolveChain = (chainInput: unknown, chainIdInput: unknown): ChainConfig =
   throw new Error("Unsupported chain. Supported values: taikoMainnet, taikoHekla, taikoHoodi");
 };
 
+const normalizeOptionalTokenAddresses = (
+  tokenAddresses: Partial<Record<ChainName, string>>,
+): Partial<Record<ChainName, string>> => {
+  const normalized: Partial<Record<ChainName, string>> = {};
+
+  if (tokenAddresses.taikoMainnet !== undefined) {
+    normalized.taikoMainnet = normalizeAddress(
+      tokenAddresses.taikoMainnet,
+      "tokenAddresses.taikoMainnet",
+    );
+  }
+
+  if (tokenAddresses.taikoHekla !== undefined) {
+    normalized.taikoHekla = normalizeAddress(
+      tokenAddresses.taikoHekla,
+      "tokenAddresses.taikoHekla",
+    );
+  }
+
+  if (tokenAddresses.taikoHoodi !== undefined) {
+    normalized.taikoHoodi = normalizeAddress(
+      tokenAddresses.taikoHoodi,
+      "tokenAddresses.taikoHoodi",
+    );
+  }
+
+  return normalized;
+};
+
 const parseGasEstimate = (
   value: unknown,
   defaults: {
@@ -339,24 +360,8 @@ export class PaymasterService {
     this.bundlerClient = bundlerClient;
     this.nowMs = nowMs;
 
-    const merged = {
-      ...DEFAULT_PAYMASTER_CONFIG,
-      ...config,
-      tokenAddresses: {
-        ...DEFAULT_PAYMASTER_CONFIG.tokenAddresses,
-        ...(config.tokenAddresses ?? {}),
-      },
-    };
-
-    const paymasterAddress = merged.paymasterAddress ?? DEFAULT_PAYMASTER_CONFIG.paymasterAddress;
-    const tokenAddressMainnet =
-      merged.tokenAddresses.taikoMainnet ?? DEFAULT_PAYMASTER_CONFIG.tokenAddresses.taikoMainnet;
-    const tokenAddressHekla =
-      merged.tokenAddresses.taikoHekla ?? DEFAULT_PAYMASTER_CONFIG.tokenAddresses.taikoHekla;
-    const tokenAddressHoodi =
-      merged.tokenAddresses.taikoHoodi ?? DEFAULT_PAYMASTER_CONFIG.tokenAddresses.taikoHoodi;
-    const quoteSignerPrivateKey =
-      merged.quoteSignerPrivateKey ?? DEFAULT_PAYMASTER_CONFIG.quoteSignerPrivateKey;
+    const tokenAddresses = config.tokenAddresses ?? {};
+    const quoteSignerPrivateKey = config.quoteSignerPrivateKey;
 
     if (
       typeof quoteSignerPrivateKey !== "string" ||
@@ -365,44 +370,82 @@ export class PaymasterService {
       throw new Error("quoteSignerPrivateKey must be a 32-byte hex private key");
     }
 
-    this.config = {
-      ...merged,
-      paymasterAddress: normalizeAddress(paymasterAddress, "paymasterAddress"),
-      quoteTtlSeconds: Math.max(15, merged.quoteTtlSeconds),
-      surchargeBps: Math.max(0, merged.surchargeBps),
-      quoteSignerPrivateKey,
-      defaultPaymasterVerificationGasLimit: merged.defaultPaymasterVerificationGasLimit,
-      defaultPaymasterPostOpGasLimit: merged.defaultPaymasterPostOpGasLimit,
-      tokenAddresses: {
-        taikoMainnet: normalizeAddress(tokenAddressMainnet, "tokenAddresses.taikoMainnet"),
-        taikoHekla: normalizeAddress(tokenAddressHekla, "tokenAddresses.taikoHekla"),
-        taikoHoodi: normalizeAddress(tokenAddressHoodi, "tokenAddresses.taikoHoodi"),
-      },
-      usdcPerEthMicros:
-        merged.usdcPerEthMicros > 0n
-          ? merged.usdcPerEthMicros
-          : DEFAULT_PAYMASTER_CONFIG.usdcPerEthMicros,
-    };
+    if (!config.paymasterAddress) {
+      throw new Error("paymasterAddress is required");
+    }
 
-    if (this.config.usdcPerEthMicros <= 0n) {
+    if (!config.usdcPerEthMicros || config.usdcPerEthMicros <= 0n) {
       throw new Error("usdcPerEthMicros must be configured and greater than zero");
     }
+
+    const normalizedTokenAddresses = normalizeOptionalTokenAddresses(tokenAddresses);
+    if (Object.keys(normalizedTokenAddresses).length === 0) {
+      throw new Error("At least one chain token address must be configured");
+    }
+
+    this.config = {
+      paymasterAddress: normalizeAddress(config.paymasterAddress, "paymasterAddress"),
+      quoteTtlSeconds: Math.max(15, config.quoteTtlSeconds ?? OPERATIONAL_DEFAULTS.quoteTtlSeconds),
+      usdcPerEthMicros: config.usdcPerEthMicros,
+      surchargeBps: Math.max(0, config.surchargeBps ?? OPERATIONAL_DEFAULTS.surchargeBps),
+      quoteSignerPrivateKey,
+      defaultPaymasterVerificationGasLimit:
+        config.defaultPaymasterVerificationGasLimit ??
+        OPERATIONAL_DEFAULTS.defaultPaymasterVerificationGasLimit,
+      defaultPaymasterPostOpGasLimit:
+        config.defaultPaymasterPostOpGasLimit ??
+        OPERATIONAL_DEFAULTS.defaultPaymasterPostOpGasLimit,
+      tokenAddresses: normalizedTokenAddresses,
+    };
 
     this.quoteSigner = privateKeyToAccount(this.config.quoteSignerPrivateKey);
   }
 
   getConfigSummary(): Record<string, unknown> {
+    const supportedChains = CHAIN_CONFIGS.filter(
+      (chain) => this.config.tokenAddresses[chain.name] !== undefined,
+    );
+
     return {
       paymasterAddress: this.config.paymasterAddress,
       quoteTtlSeconds: this.config.quoteTtlSeconds,
-      supportedChains: CHAIN_CONFIGS,
+      supportedChains,
       supportedTokens: ["USDC"],
       signerAddress: this.quoteSigner.address,
     };
   }
 
+  buildQuoteRequestKey(input: unknown): string {
+    const parsed = parseQuoteInput(input);
+
+    const stablePayload = {
+      sender: parsed.sender,
+      entryPoint: parsed.entryPoint,
+      chainId: parsed.chain.chainId,
+      token: parsed.token,
+      userOperation: {
+        nonce: String(parsed.userOperation.nonce),
+        initCode: String(parsed.userOperation.initCode ?? "0x"),
+        callData: parsed.callData,
+        callGasLimit: String(parsed.userOperation.callGasLimit ?? "0x"),
+        verificationGasLimit: String(parsed.userOperation.verificationGasLimit ?? "0x"),
+        preVerificationGas: String(parsed.userOperation.preVerificationGas ?? "0x"),
+        maxFeePerGas: String(parsed.userOperation.maxFeePerGas),
+        maxPriorityFeePerGas: String(parsed.userOperation.maxPriorityFeePerGas),
+        l1DataGas: String(parsed.userOperation.l1DataGas ?? "0x"),
+      },
+    };
+
+    return createHash("sha256").update(JSON.stringify(stablePayload)).digest("hex");
+  }
+
   async quote(input: unknown): Promise<PaymasterQuote> {
     const parsed = parseQuoteInput(input);
+    const tokenAddress = this.config.tokenAddresses[parsed.chain.name];
+
+    if (tokenAddress === undefined) {
+      throw new Error(`Chain ${parsed.chain.name} is not configured`);
+    }
 
     const gasEstimateResponse = await this.bundlerClient.rpc({
       jsonrpc: "2.0",
@@ -439,7 +482,6 @@ export class PaymasterService {
       BigInt(10_000);
     const maxTokenCostMicros = grossMicros > 0n ? grossMicros : 1n;
 
-    const tokenAddress = this.config.tokenAddresses[parsed.chain.name];
     const validAfter = Math.floor(this.nowMs() / 1000);
     const validUntil = validAfter + this.config.quoteTtlSeconds;
     const callDataHash = keccak256(parsed.callData);

@@ -21,6 +21,8 @@ import type { JsonRpcRequest, JsonRpcResponse, DependencyHealth } from "./types.
 const ENTRY_POINT_V08 = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 const ENTRY_POINT_V08_LOWER = ENTRY_POINT_V08.toLowerCase();
 const TEST_QUOTE_SIGNER_PRIVATE_KEY = `0x${"2".repeat(64)}` as const;
+const TEST_PAYMASTER_ADDRESS = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const TEST_TOKEN_ADDRESS = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const USDC_PER_ETH_MICROS = 3_000_000_000n; // $3000 per ETH
 
 const SENDER_A = "0x1111111111111111111111111111111111111111" as const;
@@ -81,6 +83,12 @@ function createTestStack(options?: {
       paymaster: {
         usdcPerEthMicros: options?.usdcPerEthMicros ?? USDC_PER_ETH_MICROS,
         quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+        paymasterAddress: TEST_PAYMASTER_ADDRESS,
+        tokenAddresses: {
+          taikoMainnet: TEST_TOKEN_ADDRESS,
+          taikoHekla: TEST_TOKEN_ADDRESS,
+          taikoHoodi: TEST_TOKEN_ADDRESS,
+        },
       },
     },
   });
@@ -176,6 +184,8 @@ describe("integration: full UserOp lifecycle", () => {
     stack.bundlerService.markBundleSubmitted(bundle!.bundleHash, {
       transactionHash: `0x${"aa".repeat(32)}`,
       blockNumber: 100,
+      gasUsed: "0x5208",
+      gasCost: "0x1234567890",
       effectiveGasPrice: "0x2540be400",
       success: true,
     });
@@ -235,11 +245,7 @@ describe("integration: full UserOp lifecycle", () => {
   it("supports pm_getPaymasterStubData for gas estimation", async () => {
     const userOp = makeUserOp();
 
-    const stub = await stack.sdk.pmGetPaymasterStubData(
-      userOp,
-      ENTRY_POINT_V08,
-      "taikoMainnet",
-    );
+    const stub = await stack.sdk.pmGetPaymasterStubData(userOp, ENTRY_POINT_V08, "taikoMainnet");
 
     expect(stub.isStub).toBe(true);
     expect(stub.paymasterAndData).toMatch(/^0x/);
@@ -284,9 +290,7 @@ describe("scenario: invalid UserOp fields", () => {
   it("rejects UserOp with invalid sender address", async () => {
     const userOp = makeUserOp({ sender: "0xnotanaddress" as `0x${string}` });
 
-    await expect(
-      stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08),
-    ).rejects.toThrow();
+    await expect(stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08)).rejects.toThrow();
   });
 
   it("rejects UserOp with missing required fields via RPC", async () => {
@@ -338,9 +342,7 @@ describe("scenario: invalid UserOp fields", () => {
     const userOp = makeUserOp();
     const badEntryPoint = "0xDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaD";
 
-    await expect(
-      stack.sdk.ethSendUserOperation(userOp, badEntryPoint),
-    ).rejects.toThrow();
+    await expect(stack.sdk.ethSendUserOperation(userOp, badEntryPoint)).rejects.toThrow();
   });
 
   it("rejects non-JSON body on /rpc", async () => {
@@ -414,9 +416,7 @@ describe("scenario: sender reputation and banning", () => {
       nonce: "0x10",
     });
 
-    await expect(
-      stack.sdk.ethSendUserOperation(bannedOp, ENTRY_POINT_V08),
-    ).rejects.toThrow();
+    await expect(stack.sdk.ethSendUserOperation(bannedOp, ENTRY_POINT_V08)).rejects.toThrow();
   });
 });
 
@@ -436,7 +436,10 @@ describe("scenario: gas estimation with Taiko L1 data gas", () => {
     const estimate = await stack.sdk.ethEstimateUserOperationGas(userOpWithL1, ENTRY_POINT_V08);
 
     const userOpWithoutL1 = makeUserOp();
-    const estimateNoL1 = await stack.sdk.ethEstimateUserOperationGas(userOpWithoutL1, ENTRY_POINT_V08);
+    const estimateNoL1 = await stack.sdk.ethEstimateUserOperationGas(
+      userOpWithoutL1,
+      ENTRY_POINT_V08,
+    );
 
     // With L1 data gas, preVerificationGas should be higher
     const preWithL1 = BigInt(estimate.preVerificationGas);
@@ -474,6 +477,8 @@ describe("scenario: multiple UserOps in one bundle", () => {
     stack.bundlerService.markBundleSubmitted(bundle!.bundleHash, {
       transactionHash: `0x${"bb".repeat(32)}`,
       blockNumber: 200,
+      gasUsed: "0x5208",
+      gasCost: "0x1234567890",
       success: true,
     });
 
@@ -524,6 +529,8 @@ describe("scenario: failed bundle submission", () => {
     stack.bundlerService.markBundleSubmitted(bundle!.bundleHash, {
       transactionHash: `0x${"cc".repeat(32)}`,
       blockNumber: 300,
+      gasUsed: "0x5208",
+      gasCost: "0x1234567890",
       success: false,
       reason: "revert: EntryPoint: AA10 sender already constructed",
     });
@@ -618,9 +625,7 @@ describe("scenario: rate limiting across RPC and REST", () => {
     expect(r2.callGasLimit).toBeTruthy();
 
     // Third should be rate limited (JSON-RPC error, not HTTP error)
-    await expect(
-      stack.sdk.ethEstimateUserOperationGas(userOp, ENTRY_POINT_V08),
-    ).rejects.toThrow();
+    await expect(stack.sdk.ethEstimateUserOperationGas(userOp, ENTRY_POINT_V08)).rejects.toThrow();
   });
 
   it("rate-limits /v1/paymaster/quote by sender and returns 429", async () => {
@@ -741,6 +746,8 @@ describe("load: bundler throughput", () => {
       stack.bundlerService.markBundleSubmitted(bundle.bundleHash, {
         transactionHash: `0x${bundleCount.toString(16).padStart(64, "0")}`,
         blockNumber: 1000 + bundleCount,
+        gasUsed: "0x5208",
+        gasCost: "0x1234567890",
         success: true,
       });
     }

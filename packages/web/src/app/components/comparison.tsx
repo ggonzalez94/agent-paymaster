@@ -99,8 +99,8 @@ export function Comparison() {
             The only option on Taiko
           </h2>
           <p className="mt-4 text-lg text-surface-500">
-            No other paymaster or bundler supports Taiko Alethia. And we&apos;re
-            cheaper than the competition on other chains.
+            No other paymaster or bundler supports Taiko Alethia. And we&apos;re cheaper than the
+            competition on other chains.
           </p>
         </div>
 
@@ -123,13 +123,8 @@ export function Comparison() {
             </thead>
             <tbody>
               {featureRows.map((row) => (
-                <tr
-                  key={row.key}
-                  className="border-b border-surface-200/50"
-                >
-                  <td className="py-4 text-sm text-surface-500">
-                    {row.label}
-                  </td>
+                <tr key={row.key} className="border-b border-surface-200/50">
+                  <td className="py-4 text-sm text-surface-500">{row.label}</td>
                   {providers.map((p) => (
                     <td key={p.name} className="py-4 text-center">
                       <div className="flex justify-center">

@@ -5,6 +5,14 @@ dist
 coverage
 .next
 **/.next
-packages/paymaster-contracts/artifacts
-packages/paymaster-contracts/cache
-packages/paymaster-contracts/typechain-types
+
+# Foundry
+packages/paymaster-contracts/out/
+packages/paymaster-contracts/cache/
+packages/paymaster-contracts/cache_forge/
+
+# SQLite
+data/
+*.db
+*.db-wal
+*.db-shm

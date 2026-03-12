@@ -124,12 +124,13 @@ const isQuoteResponse = (value: unknown): value is QuoteResponse => {
 
   const supportedTokens = value.supportedTokens;
   const supportedTokensValid =
-    Array.isArray(supportedTokens) &&
-    supportedTokens.every((token) => token === "USDC");
+    Array.isArray(supportedTokens) && supportedTokens.every((token) => token === "USDC");
 
   return (
     typeof value.quoteId === "string" &&
-    (value.chain === "taikoMainnet" || value.chain === "taikoHekla" || value.chain === "taikoHoodi") &&
+    (value.chain === "taikoMainnet" ||
+      value.chain === "taikoHekla" ||
+      value.chain === "taikoHoodi") &&
     typeof value.chainId === "number" &&
     Number.isInteger(value.chainId) &&
     value.token === "USDC" &&
@@ -169,7 +170,10 @@ export class AgentPaymasterClient {
     userOperation: UserOperation,
     entryPoint: string,
   ): Promise<UserOperationGasEstimate> {
-    return this.rpc<UserOperationGasEstimate>("eth_estimateUserOperationGas", [userOperation, entryPoint]);
+    return this.rpc<UserOperationGasEstimate>("eth_estimateUserOperationGas", [
+      userOperation,
+      entryPoint,
+    ]);
   }
 
   async ethSendUserOperation(userOperation: UserOperation, entryPoint: string): Promise<string> {
@@ -189,14 +193,21 @@ export class AgentPaymasterClient {
     entryPoint: string,
     chain?: ChainName | number | `${number}`,
   ): Promise<PaymasterRpcResult> {
-    return this.rpc<PaymasterRpcResult>("pm_getPaymasterStubData", [userOperation, entryPoint, chain]);
+    return this.rpc<PaymasterRpcResult>("pm_getPaymasterStubData", [
+      userOperation,
+      entryPoint,
+      chain,
+    ]);
   }
 
   async getUsdcQuote(request: QuoteRequest): Promise<QuoteResponse> {
     const response = await this.postJson("/v1/paymaster/quote", request);
 
     if (!isQuoteResponse(response.body)) {
-      throw new AgentPaymasterSdkError("invalid_response", "Quote endpoint returned an invalid payload");
+      throw new AgentPaymasterSdkError(
+        "invalid_response",
+        "Quote endpoint returned an invalid payload",
+      );
     }
 
     return response.body;
@@ -215,8 +226,15 @@ export class AgentPaymasterClient {
       throw new JsonRpcRequestError(response.status, response.body.error);
     }
 
-    if (!isObject(response.body) || response.body.jsonrpc !== "2.0" || !("result" in response.body)) {
-      throw new AgentPaymasterSdkError("invalid_response", "JSON-RPC endpoint returned an invalid payload");
+    if (
+      !isObject(response.body) ||
+      response.body.jsonrpc !== "2.0" ||
+      !("result" in response.body)
+    ) {
+      throw new AgentPaymasterSdkError(
+        "invalid_response",
+        "JSON-RPC endpoint returned an invalid payload",
+      );
     }
 
     return response.body.result as T;

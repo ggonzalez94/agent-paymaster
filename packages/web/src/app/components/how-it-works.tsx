@@ -88,16 +88,10 @@ export function HowItWorks() {
                 <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-servo-500/10 text-servo-400 transition-colors group-hover:bg-servo-500/15">
                   {step.icon}
                 </div>
-                <span className="text-sm font-bold text-surface-300">
-                  {step.number}
-                </span>
+                <span className="text-sm font-bold text-surface-300">{step.number}</span>
               </div>
-              <h3 className="text-xl font-semibold text-surface-900">
-                {step.title}
-              </h3>
-              <p className="mt-3 text-sm leading-relaxed text-surface-500">
-                {step.description}
-              </p>
+              <h3 className="text-xl font-semibold text-surface-900">{step.title}</h3>
+              <p className="mt-3 text-sm leading-relaxed text-surface-500">{step.description}</p>
             </div>
           ))}
         </div>

@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IEntryPoint, IPaymaster, UserOperation} from "./interfaces/AccountAbstraction.sol";
+import {BasePaymaster} from "account-abstraction/contracts/core/BasePaymaster.sol";
+import {IEntryPoint} from "account-abstraction/contracts/interfaces/IEntryPoint.sol";
+import {PackedUserOperation} from "account-abstraction/contracts/interfaces/PackedUserOperation.sol";
+import {UserOperationLib} from "account-abstraction/contracts/core/UserOperationLib.sol";
+import {_packValidationData} from "account-abstraction/contracts/core/Helpers.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 interface IERC20 {
     function allowance(address owner, address spender) external view returns (uint256);
@@ -31,7 +38,9 @@ interface IUsdcPriceOracle {
     function usdcPerEth() external view returns (uint256 microsPerEth);
 }
 
-contract TaikoUsdcPaymaster is IPaymaster {
+contract TaikoUsdcPaymaster is BasePaymaster, EIP712, ReentrancyGuard {
+    using UserOperationLib for PackedUserOperation;
+
     struct QuoteData {
         address sender;
         address token;
@@ -62,23 +71,12 @@ contract TaikoUsdcPaymaster is IPaymaster {
 
     uint256 private constant _MAX_BPS = 10_000;
     uint256 private constant _MAX_POST_OP_OVERHEAD_GAS = 1_000_000;
-    uint256 private constant _SIG_VALIDATION_FAILED = 1;
-    uint256 private constant _NOT_ENTERED = 1;
-    uint256 private constant _ENTERED = 2;
 
-    bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
-        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant _QUOTE_TYPEHASH =
         keccak256(
             "QuoteData(address sender,address token,address entryPoint,uint256 chainId,uint256 maxTokenCost,uint48 validAfter,uint48 validUntil,uint256 nonce,bytes32 callDataHash)"
         );
-    bytes32 private constant _NAME_HASH = keccak256("TaikoUsdcPaymaster");
-    bytes32 private constant _VERSION_HASH = keccak256("1");
-    uint256 private constant _SECP256K1N_HALF =
-        0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
 
-    error NotOwner();
-    error NotEntryPoint();
     error PaymasterPaused();
     error InvalidPaymasterData();
     error InvalidQuoteSender();
@@ -98,7 +96,6 @@ contract TaikoUsdcPaymaster is IPaymaster {
     error InvalidBps();
     error InvalidLimits();
     error TokenTransferFailed();
-    error ReentrancyGuard();
     error NonceAlreadyUsed();
     error InsufficientUnlockedBalance();
 
@@ -121,13 +118,10 @@ contract TaikoUsdcPaymaster is IPaymaster {
         uint256 maxNativeCostWei,
         uint256 maxQuoteTtlSeconds
     );
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event PausedSet(bool paused);
 
-    IEntryPoint public immutable entryPoint;
     IERC20 public immutable usdc;
 
-    address public owner;
     address public quoteSigner;
     IUsdcPriceOracle public priceOracle;
 
@@ -140,62 +134,8 @@ contract TaikoUsdcPaymaster is IPaymaster {
 
     mapping(bytes32 => bool) public usedQuoteHashes;
 
-    uint256 private _reentrancyStatus;
     uint256 public lockedUsdcPrefund;
     mapping(address => mapping(uint256 => bool)) public usedNonces;
-
-    constructor(
-        address owner_,
-        address entryPoint_,
-        address usdc_,
-        address quoteSigner_,
-        address priceOracle_,
-        uint256 surchargeBps_,
-        uint256 maxVerificationGasLimit_,
-        uint256 postOpOverheadGas_,
-        uint256 maxNativeCostWei_,
-        uint256 maxQuoteTtlSeconds_
-    ) {
-        if (
-            owner_ == address(0) ||
-            entryPoint_ == address(0) ||
-            usdc_ == address(0) ||
-            quoteSigner_ == address(0) ||
-            priceOracle_ == address(0)
-        ) {
-            revert InvalidAddress();
-        }
-        if (surchargeBps_ > _MAX_BPS) {
-            revert InvalidBps();
-        }
-        _validateLimits(maxVerificationGasLimit_, postOpOverheadGas_, maxNativeCostWei_, maxQuoteTtlSeconds_);
-
-        owner = owner_;
-        entryPoint = IEntryPoint(entryPoint_);
-        usdc = IERC20(usdc_);
-        quoteSigner = quoteSigner_;
-        priceOracle = IUsdcPriceOracle(priceOracle_);
-        surchargeBps = surchargeBps_;
-        maxVerificationGasLimit = maxVerificationGasLimit_;
-        postOpOverheadGas = postOpOverheadGas_;
-        maxNativeCostWei = maxNativeCostWei_;
-        maxQuoteTtlSeconds = maxQuoteTtlSeconds_;
-        _reentrancyStatus = _NOT_ENTERED;
-    }
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) {
-            revert NotOwner();
-        }
-        _;
-    }
-
-    modifier onlyEntryPoint() {
-        if (msg.sender != address(entryPoint)) {
-            revert NotEntryPoint();
-        }
-        _;
-    }
 
     modifier whenNotPaused() {
         if (paused) {
@@ -204,31 +144,51 @@ contract TaikoUsdcPaymaster is IPaymaster {
         _;
     }
 
-    modifier nonReentrant() {
-        if (_reentrancyStatus == _ENTERED) {
-            revert ReentrancyGuard();
+    constructor(
+        IEntryPoint entryPoint_,
+        address usdc_,
+        address quoteSigner_,
+        address priceOracle_,
+        uint256 surchargeBps_,
+        uint256 maxVerificationGasLimit_,
+        uint256 postOpOverheadGas_,
+        uint256 maxNativeCostWei_,
+        uint256 maxQuoteTtlSeconds_
+    ) BasePaymaster(entryPoint_) EIP712("TaikoUsdcPaymaster", "1") {
+        if (usdc_ == address(0) || quoteSigner_ == address(0) || priceOracle_ == address(0)) {
+            revert InvalidAddress();
         }
-        _reentrancyStatus = _ENTERED;
-        _;
-        _reentrancyStatus = _NOT_ENTERED;
+        if (surchargeBps_ > _MAX_BPS) {
+            revert InvalidBps();
+        }
+        _validateLimits(maxVerificationGasLimit_, postOpOverheadGas_, maxNativeCostWei_, maxQuoteTtlSeconds_);
+
+        usdc = IERC20(usdc_);
+        quoteSigner = quoteSigner_;
+        priceOracle = IUsdcPriceOracle(priceOracle_);
+        surchargeBps = surchargeBps_;
+        maxVerificationGasLimit = maxVerificationGasLimit_;
+        postOpOverheadGas = postOpOverheadGas_;
+        maxNativeCostWei = maxNativeCostWei_;
+        maxQuoteTtlSeconds = maxQuoteTtlSeconds_;
     }
 
-    function validatePaymasterUserOp(
-        UserOperation calldata userOp,
+    function _validatePaymasterUserOp(
+        PackedUserOperation calldata userOp,
         bytes32 userOpHash,
         uint256 maxCost
-    ) external override onlyEntryPoint whenNotPaused nonReentrant returns (bytes memory context, uint256 validationData) {
-        if (userOp.verificationGasLimit > maxVerificationGasLimit) {
+    ) internal override whenNotPaused nonReentrant returns (bytes memory context, uint256 validationData) {
+        if (userOp.unpackVerificationGasLimit() > maxVerificationGasLimit) {
             revert GasLimitTooHigh();
         }
         if (maxCost > maxNativeCostWei) {
             revert MaxCostExceeded();
         }
-        if (userOp.paymasterAndData.length <= 20) {
+        if (userOp.paymasterAndData.length <= PAYMASTER_DATA_OFFSET) {
             revert InvalidPaymasterData();
         }
 
-        bytes calldata paymasterData = userOp.paymasterAndData[20:];
+        bytes calldata paymasterData = userOp.paymasterAndData[PAYMASTER_DATA_OFFSET:];
         (QuoteData memory quote, bytes memory quoteSignature, PermitData memory permitData) =
             abi.decode(paymasterData, (QuoteData, bytes, PermitData));
 
@@ -244,7 +204,8 @@ contract TaikoUsdcPaymaster is IPaymaster {
             revert QuoteAlreadyUsed();
         }
 
-        if (_recoverSigner(signedQuoteHash, quoteSignature) != quoteSigner) {
+        address recovered = ECDSA.recover(signedQuoteHash, quoteSignature);
+        if (recovered != quoteSigner) {
             revert InvalidQuoteSignature();
         }
 
@@ -294,70 +255,61 @@ contract TaikoUsdcPaymaster is IPaymaster {
         validationData = _packValidationData(false, quote.validUntil, quote.validAfter);
     }
 
-    function postOp(
+    function _postOp(
         PostOpMode mode,
         bytes calldata context,
         uint256 actualGasCost,
         uint256 actualUserOpFeePerGas
-    ) external override onlyEntryPoint whenNotPaused nonReentrant {
-        PaymasterContext memory paymasterContext = abi.decode(context, (PaymasterContext));
+    ) internal override whenNotPaused nonReentrant {
+        PaymasterContext memory ctx = abi.decode(context, (PaymasterContext));
 
         uint256 nativeCostWithOverhead = actualGasCost + (actualUserOpFeePerGas * postOpOverheadGas);
-        uint256 actualTokenNeeded = _applySurcharge((nativeCostWithOverhead * paymasterContext.oraclePrice) / 1e18);
+        uint256 actualTokenNeeded = _applySurcharge((nativeCostWithOverhead * ctx.oraclePrice) / 1e18);
 
-        uint256 feeTokenAmount = paymasterContext.prefund;
+        uint256 feeTokenAmount = ctx.prefund;
         uint256 refundAmount;
 
         if (mode == PostOpMode.opSucceeded) {
-            if (actualTokenNeeded < paymasterContext.prefund) {
-                refundAmount = paymasterContext.prefund - actualTokenNeeded;
+            if (actualTokenNeeded < ctx.prefund) {
+                refundAmount = ctx.prefund - actualTokenNeeded;
                 feeTokenAmount = actualTokenNeeded;
                 if (refundAmount > 0) {
-                    _safeTransfer(address(usdc), paymasterContext.sender, refundAmount);
+                    _safeTransfer(address(usdc), ctx.sender, refundAmount);
                 }
-            } else if (actualTokenNeeded > paymasterContext.prefund) {
-                uint256 shortfall = actualTokenNeeded - paymasterContext.prefund;
-                _safeTransferFrom(address(usdc), paymasterContext.sender, address(this), shortfall);
-                feeTokenAmount = paymasterContext.prefund + shortfall;
+            } else if (actualTokenNeeded > ctx.prefund) {
+                uint256 shortfall = actualTokenNeeded - ctx.prefund;
+                _safeTransferFrom(address(usdc), ctx.sender, address(this), shortfall);
+                feeTokenAmount = ctx.prefund + shortfall;
             }
         } else if (mode == PostOpMode.opReverted) {
-            if (actualTokenNeeded < paymasterContext.prefund) {
-                refundAmount = paymasterContext.prefund - actualTokenNeeded;
+            if (actualTokenNeeded < ctx.prefund) {
+                refundAmount = ctx.prefund - actualTokenNeeded;
                 feeTokenAmount = actualTokenNeeded;
                 if (refundAmount > 0) {
-                    _safeTransfer(address(usdc), paymasterContext.sender, refundAmount);
+                    _safeTransfer(address(usdc), ctx.sender, refundAmount);
                 }
             }
         }
         // PostOpMode.postOpReverted: keep full prefund, no transfers
 
-        lockedUsdcPrefund -= paymasterContext.prefund;
+        lockedUsdcPrefund -= ctx.prefund;
 
         emit UserOperationSponsored(
             address(usdc),
-            paymasterContext.sender,
-            paymasterContext.userOpHash,
-            paymasterContext.oraclePrice,
+            ctx.sender,
+            ctx.userOpHash,
+            ctx.oraclePrice,
             actualTokenNeeded,
             feeTokenAmount,
             refundAmount
         );
     }
 
+    // ─── Admin ─────────────────────────────────────────────────
+
     function setPaused(bool paused_) external onlyOwner {
         paused = paused_;
         emit PausedSet(paused_);
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) {
-            revert InvalidAddress();
-        }
-
-        address previous = owner;
-        owner = newOwner;
-
-        emit OwnershipTransferred(previous, newOwner);
     }
 
     function setQuoteSigner(address signer) external onlyOwner {
@@ -409,26 +361,6 @@ contract TaikoUsdcPaymaster is IPaymaster {
         emit LimitsUpdated(maxVerificationGasLimit_, postOpOverheadGas_, maxNativeCostWei_, maxQuoteTtlSeconds_);
     }
 
-    function depositToEntryPoint() external payable onlyOwner {
-        entryPoint.depositTo{value: msg.value}(address(this));
-    }
-
-    function withdrawFromEntryPoint(address payable to, uint256 amount) external onlyOwner {
-        entryPoint.withdrawTo(to, amount);
-    }
-
-    function addStake(uint32 unstakeDelaySec) external payable onlyOwner {
-        entryPoint.addStake{value: msg.value}(unstakeDelaySec);
-    }
-
-    function unlockStake() external onlyOwner {
-        entryPoint.unlockStake();
-    }
-
-    function withdrawStake(address payable to) external onlyOwner {
-        entryPoint.withdrawStake(to);
-    }
-
     function withdrawToken(address token, address to, uint256 amount) external onlyOwner {
         if (token == address(usdc)) {
             uint256 available = usdc.balanceOf(address(this)) - lockedUsdcPrefund;
@@ -443,7 +375,9 @@ contract TaikoUsdcPaymaster is IPaymaster {
         return _hashTypedDataV4(_hashQuote(quote));
     }
 
-    function _validateQuote(UserOperation calldata userOp, QuoteData memory quote) private view {
+    // ─── Internal ──────────────────────────────────────────────
+
+    function _validateQuote(PackedUserOperation calldata userOp, QuoteData memory quote) private view {
         if (quote.sender != userOp.sender) {
             revert InvalidQuoteSender();
         }
@@ -484,58 +418,12 @@ contract TaikoUsdcPaymaster is IPaymaster {
         );
     }
 
-    function _hashTypedDataV4(bytes32 structHash) private view returns (bytes32) {
-        bytes32 domainSeparator = keccak256(
-            abi.encode(_EIP712_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this))
-        );
-
-        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-    }
-
-    function _recoverSigner(bytes32 digest, bytes memory signature) private pure returns (address recoveredSigner) {
-        if (signature.length != 65) {
-            revert InvalidQuoteSignature();
-        }
-
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-
-        assembly {
-            r := mload(add(signature, 0x20))
-            s := mload(add(signature, 0x40))
-            v := byte(0, mload(add(signature, 0x60)))
-        }
-
-        if (uint256(s) > _SECP256K1N_HALF) {
-            revert InvalidQuoteSignature();
-        }
-
-        if (v < 27) {
-            v += 27;
-        }
-
-        if (v != 27 && v != 28) {
-            revert InvalidQuoteSignature();
-        }
-
-        recoveredSigner = ecrecover(digest, v, r, s);
-
-        if (recoveredSigner == address(0)) {
-            revert InvalidQuoteSignature();
-        }
-    }
-
     function _applySurcharge(uint256 amount) private view returns (uint256) {
         if (amount == 0) {
             return 0;
         }
 
         return ((amount * (_MAX_BPS + surchargeBps)) + (_MAX_BPS - 1)) / _MAX_BPS;
-    }
-
-    function _packValidationData(bool sigFailed, uint48 validUntil, uint48 validAfter) private pure returns (uint256) {
-        return (sigFailed ? _SIG_VALIDATION_FAILED : 0) | (uint256(validUntil) << 160) | (uint256(validAfter) << 208);
     }
 
     function _validateLimits(
