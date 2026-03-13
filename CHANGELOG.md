@@ -30,6 +30,12 @@ Format:
 
 - None yet.
 
+## [v0.1.6] - 2026-03-13
+
+### Fixed
+
+- Removed the `cache: pnpm` setting from `actions/setup-node` so the Corepack-based pnpm setup works reliably without requiring `pnpm` on `PATH` during the GitHub Action bootstrap phase.
+
 ## [v0.1.5] - 2026-03-13
 
 ### Fixed
@@ -92,7 +98,8 @@ Format:
 
 - Documented the release contract, required GitHub Actions variables and secrets, and the Railway plus Vercel deployment flow in `README.md` and `Agents.md`.
 
-[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.1.6...HEAD
+[v0.1.6]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.6
 [v0.1.5]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.5
 [v0.1.4]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.4
 [v0.1.3]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.3
