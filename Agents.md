@@ -25,18 +25,17 @@ pnpm format:write     # auto-format
 packages/
   api/           → Hono HTTP gateway (quotes, RPC proxy, metrics)  :3000
   bundler/       → ERC-4337 bundler (Alto fork, mempool, bundles)  :3001
-  sdk/           → TypeScript client library (ESM + CJS)
   shared/        → Types, EIP-712 helpers, paymaster data packing
   paymaster-contracts/ → Solidity (Foundry): TaikoUsdcPaymaster
   web/           → Next.js 15 landing page (Tailwind 4)
 ```
 
-**Dependency flow**: `shared` ← `api`, `bundler`, `sdk`. No circular deps. `web` is standalone.
+**Dependency flow**: `shared` ← `api`, `bundler`. No circular deps. `web` is standalone.
 
 ## Architecture (How It Works)
 
 1. Agent builds a partial UserOp with USDC but no ETH
-2. `POST /v1/paymaster/quote` → API prices gas via oracle, returns EIP-712 signed `paymasterAndData`
+2. `pm_getPaymasterData` via `POST /rpc` → API prices gas via oracle, returns EIP-712 signed `paymasterAndData`
 3. Agent submits full UserOp via `POST /rpc` (`eth_sendUserOperation`)
 4. Bundler simulates, batches, submits `handleOps` to EntryPoint
 5. Contract validates quote signature in `_validatePaymasterUserOp`
@@ -47,14 +46,13 @@ packages/
 
 ## API Endpoints
 
-| Method | Path                  | Purpose                                    |
-| ------ | --------------------- | ------------------------------------------ |
-| POST   | `/v1/paymaster/quote` | Get signed USDC quote for a UserOp         |
-| POST   | `/rpc`                | JSON-RPC gateway (`eth_*`, `pm_*` methods) |
-| GET    | `/health`             | Aggregate health check                     |
-| GET    | `/status`             | Runtime config + dependency status         |
-| GET    | `/metrics`            | Prometheus metrics                         |
-| GET    | `/openapi.json`       | OpenAPI 3.1 spec                           |
+| Method | Path            | Purpose                                    |
+| ------ | --------------- | ------------------------------------------ |
+| POST   | `/rpc`          | JSON-RPC gateway (`eth_*`, `pm_*` methods) |
+| GET    | `/health`       | Aggregate health check                     |
+| GET    | `/status`       | Runtime config + dependency status         |
+| GET    | `/metrics`      | Prometheus metrics                         |
+| GET    | `/openapi.json` | OpenAPI 3.1 spec                           |
 
 ## Contracts
 
@@ -103,7 +101,7 @@ Workflow behavior:
 
 - Re-runs lint, format, TypeScript tests, builds, Solidity tests, and both Docker image builds.
 - Deploys the bundler with `railway.bundler.json`, then the API with `railway.api.json`.
-- Waits for API `/health`, then smoke tests `/status`, `/rpc`, and `/v1/paymaster/quote`.
+- Waits for API `/health`, then smoke tests `/status`, `/rpc`, and `pm_getPaymasterData`.
 - Deploys `packages/web` to Vercel production, waits for the public production URL, and smoke tests the live site over anonymous HTTP.
 - Creates or updates the GitHub Release from the matching `CHANGELOG.md` section.
 - Opts GitHub JavaScript actions into Node 24 and uses the current official action majors so release runs stay ahead of the June 2026 runner default.
@@ -134,12 +132,11 @@ Vercel should use standard deployment protection (`prod_deployment_urls_and_all_
 - **Tests**: co-located with source (`*.test.ts`). Every new module needs tests
 - **Imports**: use workspace aliases (`@agent-paymaster/shared`, etc.)
 - **Logging**: structured JSON with `requestId`, `method`, `path`, `status`, `duration`
-- **Error types**: SDK has typed errors (`HttpRequestError`, `JsonRpcRequestError`, `RateLimitError`, `TransportError`)
 - **Paymaster data**: always use `packPaymasterAndData()` / `normalizePaymasterAndData()` from shared — never hand-encode
 
 ## Common Pitfalls
 
-- **Build order matters**: `shared` must build before `api`, `bundler`, or `sdk`. The root `pnpm build` and `pnpm test` commands handle this, but if you run package scripts directly on a fresh clone, build dependencies first.
+- **Build order matters**: `shared` must build before `api` or `bundler`. The root `pnpm build` and `pnpm test` commands handle this, but if you run package scripts directly on a fresh clone, build dependencies first.
 - **Submodules**: contract tests fail without submodules. Use `git submodule update --init --recursive` if you didn't clone with `--recurse-submodules`.
 - **SQLite WAL**: the bundler and API share a SQLite volume. Don't delete `./data/` while services are running.
 - **Quote TTL**: quotes expire (default 90s). Tests that hold quotes too long will fail on-chain.

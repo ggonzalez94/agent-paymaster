@@ -93,38 +93,40 @@ const main = async () => {
       `eth_supportedEntryPoints does not include ${entryPoint}`,
     );
 
-    const quoteResponse = await assertOk(
-      await fetch(`${apiBaseUrl}/v1/paymaster/quote`, {
+    const stubResponse = await assertOk(
+      await fetch(`${apiBaseUrl}/rpc`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          chain: quoteChain,
-          entryPoint,
-          token: "USDC",
-          userOperation: sampleUserOperation,
+          jsonrpc: "2.0",
+          id: 2,
+          method: "pm_getPaymasterStubData",
+          params: [sampleUserOperation, entryPoint, quoteChain, {}],
         }),
       }),
-      "POST /v1/paymaster/quote",
+      "POST /rpc pm_getPaymasterStubData",
     );
-    const quote = await readJson(quoteResponse, "POST /v1/paymaster/quote");
+    const stubPayload = await readJson(stubResponse, "POST /rpc pm_getPaymasterStubData");
 
-    assert(typeof quote.quoteId === "string" && quote.quoteId.length > 0, "quoteId is missing");
     assert(
-      typeof quote.paymaster === "string" && /^0x[a-fA-F0-9]{40}$/.test(quote.paymaster),
+      !stubPayload.error,
+      `pm_getPaymasterStubData error: ${JSON.stringify(stubPayload.error)}`,
+    );
+    assert(
+      typeof stubPayload.result?.paymaster === "string" &&
+        /^0x[a-fA-F0-9]{40}$/.test(stubPayload.result.paymaster),
       "paymaster is invalid",
     );
     assert(
-      typeof quote.paymasterAndData === "string" && /^0x[0-9a-fA-F]+$/.test(quote.paymasterAndData),
-      "paymasterAndData is invalid",
+      typeof stubPayload.result?.paymasterData === "string" &&
+        /^0x[0-9a-fA-F]+$/.test(stubPayload.result.paymasterData),
+      "paymasterData is invalid",
     );
     assert(
-      Array.isArray(quote.supportedTokens) && quote.supportedTokens.includes("USDC"),
-      "supportedTokens is invalid",
-    );
-    assert(
-      typeof quote.maxTokenCost === "string" && quote.maxTokenCost.length > 0,
+      typeof stubPayload.result?.maxTokenCost === "string" &&
+        stubPayload.result.maxTokenCost.length > 0,
       "maxTokenCost is missing",
     );
 

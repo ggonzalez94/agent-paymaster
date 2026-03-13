@@ -1,13 +1,12 @@
 /**
  * Integration tests for the agent-paymaster system.
  *
- * Wires up real BundlerService → API gateway → SDK client
- * to test the full UserOp lifecycle end-to-end without HTTP servers.
+ * Wires up real BundlerService -> API gateway to test the full
+ * UserOp lifecycle end-to-end without HTTP servers or SDK.
  */
 import { describe, expect, it, beforeEach } from "vitest";
 
 import { BundlerService } from "@agent-paymaster/bundler";
-import { AgentPaymasterClient, type UserOperation } from "@agent-paymaster/sdk";
 
 import type { BundlerClient } from "./bundler-client.js";
 import { createApp } from "./index.js";
@@ -53,14 +52,12 @@ class LocalBundlerClient implements BundlerClient {
 }
 
 // ---------------------------------------------------------------------------
-// Test harness: creates the full stack and an SDK client that routes through it.
+// Test harness: creates the full stack for direct Hono app.request testing.
 // ---------------------------------------------------------------------------
 
 interface TestStack {
   bundlerService: BundlerService;
   bundlerClient: LocalBundlerClient;
-  sdk: AgentPaymasterClient;
-  /** Direct Hono app for low-level requests */
   app: ReturnType<typeof createApp>;
 }
 
@@ -94,23 +91,29 @@ function createTestStack(options?: {
     },
   });
 
-  // SDK client backed by Hono's in-process request handler
-  const sdk = new AgentPaymasterClient({
-    apiUrl: "http://localhost",
-    timeoutMs: 5_000,
-    fetchImpl: async (input, init) => {
-      const url = new URL(typeof input === "string" ? input : (input as Request).url);
-      const path = url.pathname + url.search;
-      return app.request(path, init as RequestInit);
-    },
-  });
-
-  return { bundlerService, bundlerClient, sdk, app };
+  return { bundlerService, bundlerClient, app };
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+interface UserOperation {
+  sender: string;
+  nonce: string;
+  initCode: string;
+  callData: string;
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  signature: string;
+  callGasLimit?: string;
+  verificationGasLimit?: string;
+  preVerificationGas?: string;
+  paymasterVerificationGasLimit?: string;
+  paymasterPostOpGasLimit?: string;
+  paymasterAndData?: string;
+  l1DataGas?: string;
+}
 
 function makeUserOp(overrides: Partial<UserOperation> = {}): UserOperation {
   return {
@@ -125,6 +128,63 @@ function makeUserOp(overrides: Partial<UserOperation> = {}): UserOperation {
   };
 }
 
+/** Send a JSON-RPC request to the /rpc endpoint. */
+async function rpc(app: ReturnType<typeof createApp>, method: string, params: unknown[]) {
+  const response = await app.request("/rpc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  return response.json() as Promise<JsonRpcResponse>;
+}
+
+/** Shorthand for eth_estimateUserOperationGas. */
+async function estimateGas(
+  app: ReturnType<typeof createApp>,
+  userOp: UserOperation,
+  entryPoint: string,
+) {
+  const res = await rpc(app, "eth_estimateUserOperationGas", [userOp, entryPoint]);
+  if ("error" in res && res.error) throw new Error(JSON.stringify(res.error));
+  return res.result as Record<string, string>;
+}
+
+/** Shorthand for eth_sendUserOperation. */
+async function sendUserOp(
+  app: ReturnType<typeof createApp>,
+  userOp: UserOperation,
+  entryPoint: string,
+) {
+  const res = await rpc(app, "eth_sendUserOperation", [userOp, entryPoint]);
+  if ("error" in res && res.error) throw new Error(JSON.stringify(res.error));
+  return res.result as string;
+}
+
+/** Shorthand for pm_getPaymasterData. */
+async function getPaymasterData(
+  app: ReturnType<typeof createApp>,
+  userOp: UserOperation,
+  entryPoint: string,
+  chain: string | number,
+) {
+  const chainId = typeof chain === "number" ? String(chain) : chain;
+  const res = await rpc(app, "pm_getPaymasterData", [userOp, entryPoint, chainId, {}]);
+  if ("error" in res && res.error) throw new Error(JSON.stringify(res.error));
+  return res.result as Record<string, unknown>;
+}
+
+/** Shorthand for pm_getPaymasterStubData. */
+async function getPaymasterStubData(
+  app: ReturnType<typeof createApp>,
+  userOp: UserOperation,
+  entryPoint: string,
+  chain: string,
+) {
+  const res = await rpc(app, "pm_getPaymasterStubData", [userOp, entryPoint, chain, {}]);
+  if ("error" in res && res.error) throw new Error(JSON.stringify(res.error));
+  return res.result as Record<string, unknown>;
+}
+
 // ============================================================================
 // 1. Integration Test Suite — Full UserOp Lifecycle
 // ============================================================================
@@ -136,11 +196,11 @@ describe("integration: full UserOp lifecycle", () => {
     stack = createTestStack();
   });
 
-  it("estimate gas → get paymaster data → send UserOp → bundle → receipt", async () => {
+  it("estimate gas -> get paymaster data -> send UserOp -> bundle -> receipt", async () => {
     const userOp = makeUserOp();
 
-    // Step 1: Estimate gas via SDK → API → Bundler
-    const gasEstimate = await stack.sdk.ethEstimateUserOperationGas(userOp, ENTRY_POINT_V08);
+    // Step 1: Estimate gas via API -> Bundler
+    const gasEstimate = await estimateGas(stack.app, userOp, ENTRY_POINT_V08);
 
     expect(gasEstimate.callGasLimit).toMatch(/^0x[0-9a-f]+$/);
     expect(gasEstimate.verificationGasLimit).toMatch(/^0x[0-9a-f]+$/);
@@ -149,7 +209,8 @@ describe("integration: full UserOp lifecycle", () => {
     expect(gasEstimate.paymasterPostOpGasLimit).toMatch(/^0x[0-9a-f]+$/);
 
     // Step 2: Get paymaster data (quote + signed paymasterAndData)
-    const paymasterData = await stack.sdk.pmGetPaymasterData(
+    const paymasterData = await getPaymasterData(
+      stack.app,
       userOp,
       ENTRY_POINT_V08,
       "taikoMainnet",
@@ -159,20 +220,20 @@ describe("integration: full UserOp lifecycle", () => {
     expect(paymasterData.paymasterAndData).toMatch(/^0x/);
     expect(paymasterData.token).toBe("USDC");
     expect(paymasterData.maxTokenCost).toMatch(/^\d+\.\d{6}$/);
-    expect(paymasterData.validUntil).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    expect(paymasterData.validUntil as number).toBeGreaterThan(Math.floor(Date.now() / 1000));
 
     // Step 3: Attach paymaster data and send the UserOp
     const fullUserOp: UserOperation = {
       ...userOp,
-      callGasLimit: paymasterData.callGasLimit,
-      verificationGasLimit: paymasterData.verificationGasLimit,
-      preVerificationGas: paymasterData.preVerificationGas,
-      paymasterVerificationGasLimit: paymasterData.paymasterVerificationGasLimit,
-      paymasterPostOpGasLimit: paymasterData.paymasterPostOpGasLimit,
-      paymasterAndData: paymasterData.paymasterAndData,
+      callGasLimit: paymasterData.callGasLimit as string,
+      verificationGasLimit: paymasterData.verificationGasLimit as string,
+      preVerificationGas: paymasterData.preVerificationGas as string,
+      paymasterVerificationGasLimit: paymasterData.paymasterVerificationGasLimit as string,
+      paymasterPostOpGasLimit: paymasterData.paymasterPostOpGasLimit as string,
+      paymasterAndData: paymasterData.paymasterAndData as string,
     };
 
-    const userOpHash = await stack.sdk.ethSendUserOperation(fullUserOp, ENTRY_POINT_V08);
+    const userOpHash = await sendUserOp(stack.app, fullUserOp, ENTRY_POINT_V08);
     expect(userOpHash).toMatch(/^0x[0-9a-f]{64}$/);
 
     // Step 4: Verify the UserOp is pending in the bundler
@@ -212,43 +273,17 @@ describe("integration: full UserOp lifecycle", () => {
   it("duplicate send returns the same hash (idempotency)", async () => {
     const userOp = makeUserOp();
 
-    const hash1 = await stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08);
-    const hash2 = await stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08);
+    const hash1 = await sendUserOp(stack.app, userOp, ENTRY_POINT_V08);
+    const hash2 = await sendUserOp(stack.app, userOp, ENTRY_POINT_V08);
 
     expect(hash1).toBe(hash2);
     expect(stack.bundlerService.getPendingUserOperationsCount()).toBe(1);
   });
 
-  it("REST quote endpoint returns a complete quote", async () => {
-    const userOp = makeUserOp();
-
-    const quote = await stack.sdk.getUsdcQuote({
-      sender: SENDER_A,
-      chain: "taikoMainnet",
-      entryPoint: ENTRY_POINT_V08,
-      token: "USDC",
-      userOperation: userOp,
-    });
-
-    expect(quote.chain).toBe("taikoMainnet");
-    expect(quote.chainId).toBe(167000);
-    expect(quote.token).toBe("USDC");
-    expect(quote.paymaster).toMatch(/^0x[a-f0-9]{40}$/);
-    expect(quote.paymasterAndData).toMatch(/^0x/);
-    expect(quote.paymasterData).toMatch(/^0x/);
-    expect(quote.estimatedGasLimit).toMatch(/^0x[0-9a-f]+$/);
-    expect(quote.estimatedGasWei).toMatch(/^0x[0-9a-f]+$/);
-    expect(Number(quote.maxTokenCostMicros)).toBeGreaterThan(0);
-    expect(quote.validUntil).toBeGreaterThan(Math.floor(Date.now() / 1000));
-    expect(quote.sender).toBe(SENDER_A.toLowerCase());
-    expect(quote.entryPoint).toBe(ENTRY_POINT_V08_LOWER);
-    expect(quote.supportedTokens).toContain("USDC");
-  });
-
   it("supports pm_getPaymasterStubData for gas estimation", async () => {
     const userOp = makeUserOp();
 
-    const stub = await stack.sdk.pmGetPaymasterStubData(userOp, ENTRY_POINT_V08, "taikoMainnet");
+    const stub = await getPaymasterStubData(stack.app, userOp, ENTRY_POINT_V08, "taikoMainnet");
 
     expect(stub.isStub).toBe(true);
     expect(stub.paymasterAndData).toMatch(/^0x/);
@@ -270,12 +305,12 @@ describe("integration: full UserOp lifecycle", () => {
 // ============================================================================
 
 describe("scenario: happy path with all Taiko chains", () => {
-  it("generates valid quotes for taikoMainnet, taikoHekla, and taikoHoodi", async () => {
+  it("generates valid paymaster data for taikoMainnet, taikoHekla, and taikoHoodi", async () => {
     const stack = createTestStack();
     const userOp = makeUserOp();
 
     for (const chain of ["taikoMainnet", "taikoHekla", "taikoHoodi"] as const) {
-      const data = await stack.sdk.pmGetPaymasterData(userOp, ENTRY_POINT_V08, chain);
+      const data = await getPaymasterData(stack.app, userOp, ENTRY_POINT_V08, chain);
       expect(data.token).toBe("USDC");
       expect(data.paymasterAndData).toMatch(/^0x/);
       expect(data.maxTokenCost).toMatch(/^\d+\.\d{6}$/);
@@ -291,9 +326,10 @@ describe("scenario: invalid UserOp fields", () => {
   });
 
   it("rejects UserOp with invalid sender address", async () => {
-    const userOp = makeUserOp({ sender: "0xnotanaddress" as `0x${string}` });
+    const userOp = makeUserOp({ sender: "0xnotanaddress" });
 
-    await expect(stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08)).rejects.toThrow();
+    const res = await rpc(stack.app, "eth_sendUserOperation", [userOp, ENTRY_POINT_V08]);
+    expect(res.error).toBeDefined();
   });
 
   it("rejects UserOp with missing required fields via RPC", async () => {
@@ -345,7 +381,8 @@ describe("scenario: invalid UserOp fields", () => {
     const userOp = makeUserOp();
     const badEntryPoint = "0xDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaDDeaD";
 
-    await expect(stack.sdk.ethSendUserOperation(userOp, badEntryPoint)).rejects.toThrow();
+    const res = await rpc(stack.app, "eth_sendUserOperation", [userOp, badEntryPoint]);
+    expect(res.error).toBeDefined();
   });
 
   it("rejects non-JSON body on /rpc", async () => {
@@ -404,7 +441,7 @@ describe("scenario: sender reputation and banning", () => {
         sender: SENDER_B,
         nonce: `0x${(i + 1).toString(16)}`,
       });
-      const hash = await stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08);
+      const hash = await sendUserOp(stack.app, userOp, ENTRY_POINT_V08);
       userOps.push(hash);
     }
 
@@ -419,7 +456,8 @@ describe("scenario: sender reputation and banning", () => {
       nonce: "0x10",
     });
 
-    await expect(stack.sdk.ethSendUserOperation(bannedOp, ENTRY_POINT_V08)).rejects.toThrow();
+    const res = await rpc(stack.app, "eth_sendUserOperation", [bannedOp, ENTRY_POINT_V08]);
+    expect(res.error).toBeDefined();
   });
 });
 
@@ -436,13 +474,10 @@ describe("scenario: gas estimation with Taiko L1 data gas", () => {
       l1DataGas: "0x1000", // 4096
     });
 
-    const estimate = await stack.sdk.ethEstimateUserOperationGas(userOpWithL1, ENTRY_POINT_V08);
+    const estimate = await estimateGas(stack.app, userOpWithL1, ENTRY_POINT_V08);
 
     const userOpWithoutL1 = makeUserOp();
-    const estimateNoL1 = await stack.sdk.ethEstimateUserOperationGas(
-      userOpWithoutL1,
-      ENTRY_POINT_V08,
-    );
+    const estimateNoL1 = await estimateGas(stack.app, userOpWithoutL1, ENTRY_POINT_V08);
 
     // With L1 data gas, preVerificationGas should be higher
     const preWithL1 = BigInt(estimate.preVerificationGas);
@@ -461,7 +496,7 @@ describe("scenario: multiple UserOps in one bundle", () => {
 
     for (const sender of senders) {
       const userOp = makeUserOp({ sender, nonce: "0x1" });
-      const hash = await stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08);
+      const hash = await sendUserOp(stack.app, userOp, ENTRY_POINT_V08);
       hashes.push(hash);
     }
 
@@ -501,7 +536,7 @@ describe("scenario: multiple UserOps in one bundle", () => {
         sender: SENDER_A,
         nonce: `0x${(i + 1).toString(16)}`,
       });
-      await stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08);
+      await sendUserOp(stack.app, userOp, ENTRY_POINT_V08);
     }
 
     const bundle = stack.bundlerService.createBundle(2);
@@ -524,7 +559,7 @@ describe("scenario: failed bundle submission", () => {
     const stack = createTestStack();
 
     const userOp = makeUserOp();
-    const hash = await stack.sdk.ethSendUserOperation(userOp, ENTRY_POINT_V08);
+    const hash = await sendUserOp(stack.app, userOp, ENTRY_POINT_V08);
 
     const bundle = stack.bundlerService.createBundle();
     expect(bundle).not.toBeNull();
@@ -545,60 +580,24 @@ describe("scenario: failed bundle submission", () => {
   });
 });
 
-describe("scenario: quote generation edge cases", () => {
-  it("rejects quote for unsupported token", async () => {
+describe("scenario: paymaster data edge cases", () => {
+  it("rejects pm_getPaymasterData with unsupported chain", async () => {
     const stack = createTestStack();
 
-    const response = await stack.app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "DAI",
-        userOperation: makeUserOp(),
-      }),
-    });
-
-    expect(response.status).toBe(400);
-    const payload = await response.json();
-    expect(payload.error).toBeDefined();
-  });
-
-  it("rejects quote with invalid JSON body", async () => {
-    const localStack = createTestStack();
-    const response = await localStack.app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "not json",
-    });
-
-    expect(response.status).toBe(400);
-    const payload = await response.json();
-    expect(payload.error.code).toBe("invalid_json");
-  });
-
-  it("rejects quote with unsupported chain", async () => {
-    const stack = createTestStack();
-
-    const response = await stack.app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chain: "ethereum",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: makeUserOp(),
-      }),
-    });
-
-    expect(response.status).toBe(400);
+    const res = await rpc(stack.app, "pm_getPaymasterData", [
+      makeUserOp(),
+      ENTRY_POINT_V08,
+      "ethereum",
+      {},
+    ]);
+    expect(res.error).toBeDefined();
   });
 
   it("resolves chain by numeric ID", async () => {
     const stack = createTestStack();
 
-    const data = await stack.sdk.pmGetPaymasterData(
+    const data = await getPaymasterData(
+      stack.app,
       makeUserOp(),
       ENTRY_POINT_V08,
       167013, // taikoHoodi by ID
@@ -609,7 +608,7 @@ describe("scenario: quote generation edge cases", () => {
   });
 });
 
-describe("scenario: rate limiting across RPC and REST", () => {
+describe("scenario: rate limiting across RPC", () => {
   it("rate-limits /rpc by sender address", async () => {
     const stack = createTestStack({
       rateLimiter: new FixedWindowRateLimiter({
@@ -621,48 +620,15 @@ describe("scenario: rate limiting across RPC and REST", () => {
     const userOp = makeUserOp();
 
     // First two should succeed
-    const r1 = await stack.sdk.ethEstimateUserOperationGas(userOp, ENTRY_POINT_V08);
+    const r1 = await estimateGas(stack.app, userOp, ENTRY_POINT_V08);
     expect(r1.callGasLimit).toBeTruthy();
 
-    const r2 = await stack.sdk.ethEstimateUserOperationGas(userOp, ENTRY_POINT_V08);
+    const r2 = await estimateGas(stack.app, userOp, ENTRY_POINT_V08);
     expect(r2.callGasLimit).toBeTruthy();
 
-    // Third should be rate limited (JSON-RPC error, not HTTP error)
-    await expect(stack.sdk.ethEstimateUserOperationGas(userOp, ENTRY_POINT_V08)).rejects.toThrow();
-  });
-
-  it("rate-limits /v1/paymaster/quote by sender and returns 429", async () => {
-    const stack = createTestStack({
-      rateLimiter: new FixedWindowRateLimiter({
-        maxRequestsPerWindow: 1,
-        windowMs: 120_000,
-      }),
-    });
-
-    const quote1 = await stack.app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: makeUserOp(),
-      }),
-    });
-    expect(quote1.status).toBe(200);
-
-    const quote2 = await stack.app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: makeUserOp(),
-      }),
-    });
-    expect(quote2.status).toBe(429);
-    expect(quote2.headers.get("x-ratelimit-limit")).toBe("1");
+    // Third should be rate limited (JSON-RPC error)
+    const r3 = await rpc(stack.app, "eth_estimateUserOperationGas", [userOp, ENTRY_POINT_V08]);
+    expect(r3.error).toBeDefined();
   });
 
   it("different senders have independent rate limit buckets", async () => {
@@ -674,17 +640,11 @@ describe("scenario: rate limiting across RPC and REST", () => {
     });
 
     // Sender A uses their one request
-    const r1 = await stack.sdk.ethSendUserOperation(
-      makeUserOp({ sender: SENDER_A }),
-      ENTRY_POINT_V08,
-    );
+    const r1 = await sendUserOp(stack.app, makeUserOp({ sender: SENDER_A }), ENTRY_POINT_V08);
     expect(r1).toMatch(/^0x/);
 
     // Sender B should still be able to send
-    const r2 = await stack.sdk.ethSendUserOperation(
-      makeUserOp({ sender: SENDER_B }),
-      ENTRY_POINT_V08,
-    );
+    const r2 = await sendUserOp(stack.app, makeUserOp({ sender: SENDER_B }), ENTRY_POINT_V08);
     expect(r2).toMatch(/^0x/);
   });
 });
@@ -703,7 +663,8 @@ describe("load: bundler throughput", () => {
     });
 
     const submissions = Array.from({ length: 100 }, (_, i) =>
-      stack.sdk.ethSendUserOperation(
+      sendUserOp(
+        stack.app,
         makeUserOp({
           sender: SENDER_A,
           nonce: `0x${(i + 1).toString(16)}`,
@@ -725,7 +686,8 @@ describe("load: bundler throughput", () => {
 
     // Submit 50 UserOps
     for (let i = 0; i < 50; i++) {
-      const hash = await stack.sdk.ethSendUserOperation(
+      const hash = await sendUserOp(
+        stack.app,
         makeUserOp({
           sender: SENDER_A,
           nonce: `0x${(i + 1).toString(16)}`,
@@ -770,7 +732,8 @@ describe("load: bundler throughput", () => {
     const stack = createTestStack();
 
     const estimations = Array.from({ length: 50 }, (_, i) =>
-      stack.sdk.ethEstimateUserOperationGas(
+      estimateGas(
+        stack.app,
         makeUserOp({
           sender: SENDER_A,
           nonce: `0x${(i + 1).toString(16)}`,
@@ -791,31 +754,25 @@ describe("load: bundler throughput", () => {
     }
   });
 
-  it("concurrent quote requests return valid results", async () => {
+  it("concurrent pm_getPaymasterData requests return valid results", async () => {
     const stack = createTestStack();
 
-    const quotes = Array.from({ length: 20 }, (_, i) =>
-      stack.sdk.getUsdcQuote({
-        sender: SENDER_A,
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: makeUserOp({
-          nonce: `0x${(i + 1).toString(16)}`,
-        }),
-      }),
+    const requests = Array.from({ length: 20 }, (_, i) =>
+      getPaymasterData(
+        stack.app,
+        makeUserOp({ nonce: `0x${(i + 1).toString(16)}` }),
+        ENTRY_POINT_V08,
+        "taikoMainnet",
+      ),
     );
 
-    const results = await Promise.all(quotes);
+    const results = await Promise.all(requests);
 
     expect(results).toHaveLength(20);
 
-    const quoteIds = new Set(results.map((q) => q.quoteId));
-    expect(quoteIds.size).toBe(20); // Each quote should be unique
-
-    for (const quote of results) {
-      expect(quote.chain).toBe("taikoMainnet");
-      expect(Number(quote.maxTokenCostMicros)).toBeGreaterThan(0);
+    for (const data of results) {
+      expect(data.token).toBe("USDC");
+      expect(data.maxTokenCost).toMatch(/^\d+\.\d{6}$/);
     }
   });
 });

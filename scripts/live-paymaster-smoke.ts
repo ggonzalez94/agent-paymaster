@@ -1,8 +1,11 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { packPaymasterAndData } from "@agent-paymaster/shared";
+import {
+  packPaymasterAndData,
+  PAYMASTER_DATA_PARAMETERS,
+  SPONSORED_USER_OPERATION_TYPES,
+} from "@agent-paymaster/shared";
 import {
   concatHex,
   createPublicClient,
@@ -19,14 +22,6 @@ import {
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-
-import {
-  applyPermitToPaymasterQuote,
-  createPermitSignature,
-  type Address,
-  type QuoteResponse,
-  type UserOperation,
-} from "../packages/sdk/src/index.ts";
 import {
   ChainlinkOracleSource,
   CoinbaseOracleSource,
@@ -44,54 +39,6 @@ const ERC20_ABI = parseAbi([
   "function nonces(address owner) view returns (uint256)",
   "function transfer(address to, uint256 value) returns (bool)",
 ]);
-
-const QUOTE_TYPES = {
-  SponsoredUserOperation: [
-    { name: "sender", type: "address" },
-    { name: "nonce", type: "uint256" },
-    { name: "initCodeHash", type: "bytes32" },
-    { name: "callDataHash", type: "bytes32" },
-    { name: "accountGasLimits", type: "bytes32" },
-    { name: "paymasterGasLimits", type: "bytes32" },
-    { name: "preVerificationGas", type: "uint256" },
-    { name: "gasFees", type: "bytes32" },
-    { name: "token", type: "address" },
-    { name: "exchangeRate", type: "uint256" },
-    { name: "maxTokenCost", type: "uint256" },
-    { name: "validAfter", type: "uint48" },
-    { name: "validUntil", type: "uint48" },
-    { name: "postOpOverheadGas", type: "uint32" },
-    { name: "surchargeBps", type: "uint16" },
-    { name: "chainId", type: "uint256" },
-    { name: "paymaster", type: "address" },
-  ],
-} as const;
-
-const PAYMASTER_DATA_PARAMETERS = [
-  {
-    type: "tuple",
-    name: "quote",
-    components: [
-      { name: "token", type: "address" },
-      { name: "exchangeRate", type: "uint256" },
-      { name: "maxTokenCost", type: "uint256" },
-      { name: "validAfter", type: "uint48" },
-      { name: "validUntil", type: "uint48" },
-      { name: "postOpOverheadGas", type: "uint32" },
-      { name: "surchargeBps", type: "uint16" },
-    ],
-  },
-  { type: "bytes", name: "quoteSignature" },
-  {
-    type: "tuple",
-    name: "permit",
-    components: [
-      { name: "value", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-      { name: "signature", type: "bytes" },
-    ],
-  },
-] as const;
 
 const ZERO_SIGNATURE = `0x${"00".repeat(65)}` as Hex;
 const WEI_PER_ETH = 1_000_000_000_000_000_000n;
@@ -220,7 +167,7 @@ const main = async () => {
     functionName: "ping",
   });
 
-  const userOperation: UserOperation = {
+  const userOperation = {
     sender: accountAddress,
     nonce: "0x0",
     initCode: "0x",
@@ -280,57 +227,22 @@ const main = async () => {
       chainId: 167000,
       verifyingContract: paymasterAddress,
     },
-    types: QUOTE_TYPES,
+    types: SPONSORED_USER_OPERATION_TYPES,
     primaryType: "SponsoredUserOperation",
     message: quoteMessage,
   });
 
-  const paymasterData = encodeAbiParameters(PAYMASTER_DATA_PARAMETERS, [
-    {
-      token: usdcAddress,
-      exchangeRate: usdcPerEthMicros,
-      maxTokenCost: maxTokenCostMicros,
-      validAfter: Number(validAfter),
-      validUntil: Number(validUntil),
-      postOpOverheadGas: Number(paymasterPostOpGasLimit),
-      surchargeBps: Number(surchargeBps),
-    },
-    quoteSignature,
-    {
-      value: 0n,
-      deadline: 0n,
-      signature: "0x",
-    },
-  ]) as Hex;
-
-  const quote: QuoteResponse = {
-    quoteId: createHash("sha256").update(paymasterData.slice(2), "hex").digest("hex").slice(0, 24),
-    chain: "taikoMainnet",
-    chainId: 167000,
-    token: "USDC",
-    paymaster: paymasterAddress,
-    paymasterData,
-    paymasterAndData: packPaymasterAndData({
-      paymaster: paymasterAddress,
-      paymasterVerificationGasLimit,
-      paymasterPostOpGasLimit,
-      paymasterData,
-    }) as Hex,
-    callGasLimit: toHexQuantity(callGasLimit),
-    verificationGasLimit: toHexQuantity(verificationGasLimit),
-    preVerificationGas: toHexQuantity(preVerificationGas),
-    paymasterVerificationGasLimit: toHexQuantity(paymasterVerificationGasLimit),
-    paymasterPostOpGasLimit: toHexQuantity(paymasterPostOpGasLimit),
-    estimatedGasLimit: toHexQuantity(totalGasLimit),
-    estimatedGasWei: toHexQuantity(estimatedGasWei),
-    maxTokenCostMicros: maxTokenCostMicros.toString(),
-    maxTokenCost: formatUsdcMicros(maxTokenCostMicros),
+  const quoteDataForEncoding = {
+    token: usdcAddress,
+    exchangeRate: usdcPerEthMicros,
+    maxTokenCost: maxTokenCostMicros,
+    validAfter: Number(validAfter),
     validUntil: Number(validUntil),
-    entryPoint: entryPointAddress,
-    sender: accountAddress,
-    tokenAddress: usdcAddress,
-    supportedTokens: ["USDC"],
+    postOpOverheadGas: Number(paymasterPostOpGasLimit),
+    surchargeBps: Number(surchargeBps),
   };
+
+  const maxTokenCost = formatUsdcMicros(maxTokenCostMicros);
 
   const deployerUsdcBalance = await publicClient.readContract({
     address: usdcAddress,
@@ -341,7 +253,7 @@ const main = async () => {
 
   if (deployerUsdcBalance < maxTokenCostMicros) {
     throw new Error(
-      `deployer USDC balance ${formatUsdcMicros(deployerUsdcBalance)} is below required ${quote.maxTokenCost}`,
+      `deployer USDC balance ${formatUsdcMicros(deployerUsdcBalance)} is below required ${maxTokenCost}`,
     );
   }
 
@@ -375,27 +287,43 @@ const main = async () => {
   });
   const permitDeadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
-  const permit = await createPermitSignature(
-    {
+  const permitSig = await ownerAccount.signTypedData({
+    domain: {
+      name: "USD Coin",
+      version: "2",
+      chainId: 167000,
+      verifyingContract: usdcAddress,
+    },
+    types: {
+      Permit: [
+        { name: "owner", type: "address" },
+        { name: "spender", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "nonce", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+      ],
+    },
+    primaryType: "Permit",
+    message: {
       owner: accountAddress,
       spender: paymasterAddress,
       value: maxTokenCostMicros,
       nonce: permitNonce,
       deadline: permitDeadline,
-      tokenAddress: usdcAddress,
-      chainId: 167000,
     },
-    async (typedData) =>
-      ownerAccount.signTypedData({
-        domain: typedData.domain,
-        types: typedData.types,
-        primaryType: typedData.primaryType,
-        message: typedData.message,
-      }),
-  );
+  });
 
-  const quotedWithPermit = applyPermitToPaymasterQuote(quote, permit);
-  const packedPaymasterAndData = quotedWithPermit.paymasterAndData;
+  const paymasterData = encodeAbiParameters(PAYMASTER_DATA_PARAMETERS, [
+    quoteDataForEncoding,
+    quoteSignature,
+    { value: maxTokenCostMicros, deadline: permitDeadline, signature: permitSig },
+  ]) as Hex;
+  const packedPaymasterAndData = packPaymasterAndData({
+    paymaster: paymasterAddress,
+    paymasterVerificationGasLimit,
+    paymasterPostOpGasLimit,
+    paymasterData,
+  }) as Hex;
 
   const packedForHash = {
     sender: accountAddress,
@@ -463,7 +391,7 @@ const main = async () => {
   console.log(`  handleOps tx: ${handleOpsHash}`);
   console.log(`  handleOps status: ${handleOpsReceipt.status}`);
   console.log(`  pingCount: ${pingCount}`);
-  console.log(`  quote max token cost: ${quote.maxTokenCost} USDC`);
+  console.log(`  quote max token cost: ${maxTokenCost} USDC`);
   console.log(
     `  paymaster USDC delta: ${formatUsdcMicros(paymasterUsdcAfter - paymasterUsdcBefore)} USDC`,
   );

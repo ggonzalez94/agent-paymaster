@@ -14,7 +14,6 @@ import {
   CompositePriceProvider,
   KrakenOracleSource,
 } from "./price-provider.js";
-import type { PersistenceStore } from "./persistence.js";
 import { FixedWindowRateLimiter, type RateLimitResult } from "./rate-limit.js";
 import {
   type JsonRpcId,
@@ -49,7 +48,6 @@ export interface CreateAppOptions {
   paymasterService?: PaymasterService;
   metrics?: MetricsRegistry;
   rateLimiter?: FixedWindowRateLimiter;
-  persistence?: PersistenceStore;
 }
 
 const DEFAULT_BUNDLER_RPC_URL = "http://127.0.0.1:3001/rpc";
@@ -260,45 +258,16 @@ const senderFromRpcPayload = (payload: unknown): string | null => {
   return normalizeSender(firstParam.sender);
 };
 
-const senderFromQuoteBody = (payload: unknown): string | null => {
-  if (!isObject(payload)) {
-    return null;
-  }
-
-  const direct = normalizeSender(payload.sender);
-  if (direct !== null) {
-    return direct;
-  }
-
-  if (!isObject(payload.userOperation)) {
-    return null;
-  }
-
-  return normalizeSender(payload.userOperation.sender);
-};
-
 const applyRateLimitHeaders = (response: Response, result: RateLimitResult): void => {
   response.headers.set("X-RateLimit-Limit", String(result.limit));
   response.headers.set("X-RateLimit-Remaining", String(result.remaining));
   response.headers.set("X-RateLimit-Reset", String(result.resetAt));
 };
 
-const resolveRouteLabel = (path: string): string => {
-  if (path === "/") {
-    return "/";
-  }
+const KNOWN_ROUTES = new Set(["/health", "/status", "/metrics", "/openapi.json", "/rpc"]);
 
-  const knownRoutes = new Set([
-    "/health",
-    "/status",
-    "/metrics",
-    "/openapi.json",
-    "/rpc",
-    "/v1/paymaster/quote",
-  ]);
-
-  return knownRoutes.has(path) ? path : "<unknown>";
-};
+const resolveRouteLabel = (path: string): string =>
+  path === "/" ? "/" : KNOWN_ROUTES.has(path) ? path : "<unknown>";
 
 const mergeConfig = (base: ApiConfig, override: Partial<ApiConfig> | undefined): ApiConfig => {
   if (override === undefined) {
@@ -341,7 +310,6 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
   const mergedConfig = mergeConfig(resolveConfig(), options.config);
 
   const metrics = options.metrics ?? new MetricsRegistry();
-  const persistence = options.persistence;
   const bundlerClient =
     options.bundlerClient ??
     new HttpBundlerClient({
@@ -355,13 +323,10 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
 
   const rateLimiter =
     options.rateLimiter ??
-    new FixedWindowRateLimiter(
-      {
-        maxRequestsPerWindow: mergedConfig.rateLimit.maxRequestsPerWindow,
-        windowMs: mergedConfig.rateLimit.windowMs,
-      },
-      persistence,
-    );
+    new FixedWindowRateLimiter({
+      maxRequestsPerWindow: mergedConfig.rateLimit.maxRequestsPerWindow,
+      windowMs: mergedConfig.rateLimit.windowMs,
+    });
 
   const app = new Hono();
 
@@ -517,85 +482,6 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
     const result = c.json(rpcResponse, 200);
     applyRateLimitHeaders(result, rateLimitResult);
     return result;
-  });
-
-  app.post("/v1/paymaster/quote", async (c) => {
-    const body = await c.req.json().catch(() => null);
-
-    if (body === null) {
-      return c.json(
-        {
-          error: {
-            code: "invalid_json",
-            message: "Body must be valid JSON",
-          },
-        },
-        400,
-      );
-    }
-
-    const sender = senderFromQuoteBody(body);
-    const fallbackClientId =
-      getClientIdentifier(c.req.header("x-forwarded-for")) ??
-      getClientIdentifier(c.req.header("cf-connecting-ip")) ??
-      "anonymous";
-
-    const limiterKey = sender === null ? `ip:${fallbackClientId}` : `sender:${sender}`;
-    const rateLimitResult = rateLimiter.consume(limiterKey);
-
-    if (!rateLimitResult.allowed) {
-      metrics.recordRateLimit("/v1/paymaster/quote");
-
-      const result = c.json(
-        {
-          error: {
-            code: "rate_limit_exceeded",
-            message: "Rate limit exceeded",
-            limit: rateLimitResult.limit,
-            resetAt: rateLimitResult.resetAt,
-          },
-        },
-        429,
-      );
-      applyRateLimitHeaders(result, rateLimitResult);
-      return result;
-    }
-
-    try {
-      const quoteKey = paymasterService.buildQuoteRequestKey(body);
-      const cachedQuote = persistence?.getIssuedQuote(quoteKey);
-      const quote = cachedQuote ?? (await paymasterService.quote(body));
-
-      metrics.recordQuote(quote.chain, "ok");
-      if (cachedQuote === null || cachedQuote === undefined) {
-        persistence?.saveIssuedQuote(quoteKey, quote);
-      }
-
-      const result = c.json({
-        ...quote,
-        supportedTokens: ["USDC"],
-      });
-
-      applyRateLimitHeaders(result, rateLimitResult);
-      return result;
-    } catch (error) {
-      logEvent("error", "quote.generation_failed", {
-        error: error instanceof Error ? error.message : "quote_generation_failed",
-      });
-      metrics.recordQuote("unknown", "error");
-
-      const result = c.json(
-        {
-          error: {
-            code: "quote_generation_failed",
-            message: "Unable to generate quote",
-          },
-        },
-        400,
-      );
-      applyRateLimitHeaders(result, rateLimitResult);
-      return result;
-    }
   });
 
   return app;

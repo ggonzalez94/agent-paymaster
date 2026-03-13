@@ -1,26 +1,23 @@
-const codeString = `import { createPublicClient, http } from "viem";
-import {
-  ServoClient,
-  applyPermitToPaymasterQuote,
-} from "@agent-paymaster/sdk";
+const codeString = `import { createClient, http } from "viem";
+import { taikoAlethia } from "viem/chains";
 
-const servo = new ServoClient({
-  apiUrl: "https://api-production-cdfe.up.railway.app",
+const client = createClient({
+  chain: taikoAlethia,
+  transport: http("https://servo.taiko.xyz/rpc"),
 });
 
-// 1. Get a USDC quote for your UserOperation
-const quote = await servo.getUsdcQuote({
-  chain: "taikoMainnet",
-  entryPoint: "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
-  token: "USDC",
-  userOperation: myUserOp,
+// 1. Get stub data to learn the USDC cost
+const stub = await client.request({
+  method: "pm_getPaymasterStubData",
+  params: [userOp, entryPoint, "0x28C70", {}],
 });
+// stub.maxTokenCost → "2370000" (2.37 USDC)
 
-// 2. Sign an EIP-2612 USDC permit with viem
-const permitSig = await walletClient.signTypedData({
+// 2. Sign an EIP-2612 permit for that cost
+const permit = await walletClient.signTypedData({
   domain: { name: "USD Coin", version: "2",
     chainId: 167000,
-    verifyingContract: quote.tokenAddress },
+    verifyingContract: USDC_ADDRESS },
   types: { Permit: [
     { name: "owner", type: "address" },
     { name: "spender", type: "address" },
@@ -31,23 +28,23 @@ const permitSig = await walletClient.signTypedData({
   primaryType: "Permit",
   message: {
     owner: account.address,
-    spender: quote.paymaster,
-    value: BigInt(quote.maxTokenCostMicros),
+    spender: stub.paymaster,
+    value: BigInt(stub.maxTokenCost),
     nonce: 0n,
-    deadline: BigInt(quote.validUntil),
+    deadline: BigInt(stub.validUntil),
   },
 });
 
-// 3. Inject permit and send via bundler
-const final = applyPermitToPaymasterQuote(quote, {
-  value: BigInt(quote.maxTokenCostMicros),
-  deadline: BigInt(quote.validUntil),
-  signature: permitSig,
-});`;
+// 3. Get final paymasterData with the permit
+const result = await client.request({
+  method: "pm_getPaymasterData",
+  params: [userOp, entryPoint, "0x28C70", { permit }],
+});
+// result.paymasterData → ready to use`;
 
 const integrationDetails = [
-  { label: "API endpoint", value: "https://api-production-cdfe.up.railway.app/rpc" },
-  { label: "SDK", value: "npm install @agent-paymaster/sdk" },
+  { label: "RPC endpoint", value: "https://servo.taiko.xyz/rpc" },
+  { label: "Standard", value: "ERC-7677 (pm_getPaymasterData)" },
   { label: "Chain", value: "Taiko Alethia (167000)" },
   { label: "EntryPoint", value: "0x0000000071727De22E5E9d8BAf0edAc6f37da032" },
 ];
@@ -65,13 +62,13 @@ export function CodeExample() {
               <span className="text-surface-500">to integrate.</span>
             </h2>
             <p className="mt-6 text-lg leading-relaxed text-surface-500">
-              Get a quote, sign a permit, send it. Use viem for everything else — our SDK only adds
-              the two Servo-specific helpers you need.
+              Standard ERC-7677 paymaster RPC. Use viem directly — get a quote, sign a permit, send
+              it. No SDK, no proprietary abstractions.
             </p>
             <div className="mt-8 space-y-4">
               {[
-                "Built on viem — no proprietary abstractions",
-                "Only two functions: getUsdcQuote + applyPermit",
+                "Standard ERC-7677 — works with any compliant client",
+                "Pure viem — no SDK or wrapper needed",
                 "Works with any ERC-4337 smart account",
               ].map((feature) => (
                 <div key={feature} className="flex items-center gap-3">

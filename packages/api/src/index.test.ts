@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BundlerClient } from "./bundler-client.js";
 import { createApp, validateConfig } from "./index.js";
-import { StaticPriceProvider, type PaymasterQuote } from "./paymaster-service.js";
+import { StaticPriceProvider } from "./paymaster-service.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "./types.js";
 
@@ -85,18 +85,6 @@ class MissingPaymasterGasBundlerClient extends FakeBundlerClient {
     }
 
     return super.rpc(request);
-  }
-}
-
-class FakePersistenceStore {
-  readonly issuedQuotes = new Map<string, PaymasterQuote>();
-
-  getIssuedQuote(quoteKey: string): PaymasterQuote | null {
-    return this.issuedQuotes.get(quoteKey) ?? null;
-  }
-
-  saveIssuedQuote(quoteKey: string, quote: PaymasterQuote): void {
-    this.issuedQuotes.set(quoteKey, quote);
   }
 }
 
@@ -193,79 +181,6 @@ describe("api gateway", () => {
     expect(estimateCall).toBeDefined();
   });
 
-  it("returns a USDC quote payload", async () => {
-    const bundlerClient = new FakeBundlerClient();
-    const app = createTestApp(bundlerClient);
-
-    const response = await app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: SAMPLE_USER_OPERATION,
-      }),
-    });
-
-    expect(response.status).toBe(200);
-
-    const payload = await response.json();
-    expect(payload.chain).toBe("taikoMainnet");
-    expect(payload.supportedTokens).toContain("USDC");
-    expect(payload.paymasterAndData.startsWith("0x")).toBe(true);
-    expect(payload.paymasterData.startsWith("0x")).toBe(true);
-    expect(Buffer.from(payload.paymasterData.slice(2), "hex").toString("utf8")).not.toContain(
-      "quoteId",
-    );
-    expect(payload.maxTokenCostMicros).toMatch(/^\d+$/);
-  });
-
-  it("applies sender-based rate limits", async () => {
-    const bundlerClient = new FakeBundlerClient();
-    const app = createTestApp(bundlerClient, {
-      rateLimiter: new FixedWindowRateLimiter({
-        maxRequestsPerWindow: 1,
-        windowMs: 120_000,
-      }),
-    });
-
-    const first = await app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: SAMPLE_USER_OPERATION,
-      }),
-    });
-
-    expect(first.status).toBe(200);
-
-    const second = await app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: SAMPLE_USER_OPERATION,
-      }),
-    });
-
-    expect(second.status).toBe(429);
-
-    const payload = await second.json();
-    expect(payload.error.code).toBe("rate_limit_exceeded");
-  });
-
   it("exports metrics in Prometheus format", async () => {
     const bundlerClient = new FakeBundlerClient();
     const app = createTestApp(bundlerClient);
@@ -353,29 +268,6 @@ describe("api gateway", () => {
     expect(payload.error.code).toBe(-32005);
   });
 
-  it("falls back to configured paymaster gas limits when bundler omits them", async () => {
-    const bundlerClient = new MissingPaymasterGasBundlerClient();
-    const app = createTestApp(bundlerClient);
-
-    const response = await app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chain: "taikoMainnet",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: SAMPLE_USER_OPERATION,
-      }),
-    });
-
-    expect(response.status).toBe(200);
-    const payload = await response.json();
-    expect(payload.paymasterVerificationGasLimit).toBe("0xea60");
-    expect(payload.paymasterPostOpGasLimit).toBe("0xafc8");
-  });
-
   it("does not expose pricing internals from /status", async () => {
     const bundlerClient = new FakeBundlerClient();
     const app = createTestApp(bundlerClient);
@@ -387,119 +279,6 @@ describe("api gateway", () => {
     expect(payload.paymaster.usdcPerEth).toBeUndefined();
     expect(payload.paymaster.tokenAddresses).toBeUndefined();
     expect(payload.paymaster.surchargeBps).toBeUndefined();
-  });
-
-  it("reuses persisted quotes across app restarts", async () => {
-    const persistence = new FakePersistenceStore();
-    const firstBundlerClient = new FakeBundlerClient();
-    const firstApp = createApp({
-      bundlerClient: firstBundlerClient,
-      persistence: persistence as never,
-      rateLimiter: new FixedWindowRateLimiter({
-        maxRequestsPerWindow: 10,
-        windowMs: 120_000,
-      }),
-      config: {
-        paymaster: {
-          priceProvider: new StaticPriceProvider(3_000_000_000n),
-          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
-          paymasterAddress: TEST_PAYMASTER_ADDRESS,
-          tokenAddresses: {
-            taikoMainnet: TEST_TOKEN_ADDRESS,
-          },
-        },
-      },
-    });
-
-    const requestBody = {
-      chain: "taikoMainnet",
-      entryPoint: ENTRY_POINT_V08,
-      token: "USDC",
-      userOperation: SAMPLE_USER_OPERATION,
-    };
-
-    const firstResponse = await firstApp.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    expect(firstResponse.status).toBe(200);
-    const firstPayload = await firstResponse.json();
-    expect(
-      firstBundlerClient.rpcCalls.filter((call) => call.method === "eth_estimateUserOperationGas"),
-    ).toHaveLength(1);
-
-    const secondBundlerClient = new FakeBundlerClient();
-    const secondApp = createApp({
-      bundlerClient: secondBundlerClient,
-      persistence: persistence as never,
-      rateLimiter: new FixedWindowRateLimiter({
-        maxRequestsPerWindow: 10,
-        windowMs: 120_000,
-      }),
-      config: {
-        paymaster: {
-          priceProvider: new StaticPriceProvider(3_000_000_000n),
-          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
-          paymasterAddress: TEST_PAYMASTER_ADDRESS,
-          tokenAddresses: {
-            taikoMainnet: TEST_TOKEN_ADDRESS,
-          },
-        },
-      },
-    });
-
-    const secondResponse = await secondApp.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    expect(secondResponse.status).toBe(200);
-    const secondPayload = await secondResponse.json();
-    expect(secondPayload.quoteId).toBe(firstPayload.quoteId);
-    expect(
-      secondBundlerClient.rpcCalls.filter((call) => call.method === "eth_estimateUserOperationGas"),
-    ).toHaveLength(0);
-  });
-
-  it("rejects quotes for chains that are not configured", async () => {
-    const bundlerClient = new FakeBundlerClient();
-    const app = createApp({
-      bundlerClient,
-      config: {
-        paymaster: {
-          priceProvider: new StaticPriceProvider(3_000_000_000n),
-          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
-          paymasterAddress: TEST_PAYMASTER_ADDRESS,
-          tokenAddresses: {
-            taikoMainnet: TEST_TOKEN_ADDRESS,
-          },
-        },
-      },
-    });
-
-    const response = await app.request("/v1/paymaster/quote", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        chain: "taikoHekla",
-        entryPoint: ENTRY_POINT_V08,
-        token: "USDC",
-        userOperation: SAMPLE_USER_OPERATION,
-      }),
-    });
-
-    expect(response.status).toBe(400);
-    const payload = await response.json();
-    expect(payload.error.code).toBe("quote_generation_failed");
   });
 
   it("accepts config with a single valid chain token address", () => {
@@ -541,5 +320,133 @@ describe("api gateway", () => {
         USDC_MAINNET_ADDRESS: TEST_TOKEN_ADDRESS,
       } as NodeJS.ProcessEnv),
     ).toThrow("PAYMASTER_STATIC_USDC_PER_ETH_MICROS is no longer supported");
+  });
+
+  it("pm_getPaymasterData with permit context embeds permit", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "pm_getPaymasterData",
+        params: [
+          SAMPLE_USER_OPERATION,
+          ENTRY_POINT_V08,
+          "taikoMainnet",
+          {
+            permit: {
+              value: "999999999",
+              deadline: "1900000000",
+              signature: "0xaabbccdd",
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result.paymasterData).toContain("aabbccdd");
+  });
+
+  it("pm_getPaymasterData rejects permit below maxTokenCost", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 11,
+        method: "pm_getPaymasterData",
+        params: [
+          SAMPLE_USER_OPERATION,
+          ENTRY_POINT_V08,
+          "taikoMainnet",
+          {
+            permit: {
+              value: "0",
+              deadline: "1900000000",
+              signature: "0xaabbccdd",
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.error).toBeDefined();
+    expect(payload.error.code).toBe(-32603);
+  });
+
+  it("pm_getPaymasterStubData ignores permit context", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 12,
+        method: "pm_getPaymasterStubData",
+        params: [
+          SAMPLE_USER_OPERATION,
+          ENTRY_POINT_V08,
+          "taikoMainnet",
+          {
+            permit: {
+              value: "999999999",
+              deadline: "1900000000",
+              signature: "0xaabbccdd",
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result.isStub).toBe(true);
+    expect(payload.result.paymasterData).toBeDefined();
+  });
+
+  it("falls back to configured paymaster gas limits via pm_getPaymasterData", async () => {
+    const bundlerClient = new MissingPaymasterGasBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 13,
+        method: "pm_getPaymasterData",
+        params: [SAMPLE_USER_OPERATION, ENTRY_POINT_V08, "taikoMainnet"],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result.paymasterVerificationGasLimit).toBe("0xea60");
+    expect(payload.result.paymasterPostOpGasLimit).toBe("0xafc8");
   });
 });

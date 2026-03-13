@@ -11,7 +11,12 @@ Servo implements the standard ERC-4337 paymaster flow. An agent that holds USDC 
 ```
 Agent (has USDC, no ETH)
   |
-  1. POST /v1/paymaster/quote  { userOp, token: USDC }
+  1. POST /rpc  { method: "pm_getPaymasterStubData", params: [userOp, entryPoint, chainId, context] }
+  |     returns: stub paymasterData + USDC cost estimate
+  |
+  2. Agent signs an EIP-2612 USDC permit for the cost
+  |
+  3. POST /rpc  { method: "pm_getPaymasterData", params: [userOp, entryPoint, chainId, context with permit] }
   |
   v
 Servo API
@@ -20,16 +25,14 @@ Servo API
   |  oracle policy: Chainlink mainnet primary, Coinbase + Kraken fallback, fail-closed on quorum/deviation issues
   |  surcharge is configurable; 5% is the default reference in this repo
   |  signs full sponsorship terms with EIP-712 (quote signer key)
-  |  returns: { packed paymasterAndData, paymasterData, gas fields, maxTokenCost: "2.37 USDC", quoteId }
+  |  returns: { paymasterData, gas fields }
   |
   v
 Agent
-  |  attaches the returned gas fields to the UserOp
-  |  uses the packed paymasterAndData directly for on-chain handleOps flows
-  |  if needed, can also approve USDC beforehand or attach an ERC-2612 permit
+  |  attaches the returned gas fields and paymasterData to the UserOp
   |  signs the full UserOp
   |
-  2. POST /rpc  { method: "eth_sendUserOperation", params: [userOp, entryPoint] }
+  4. POST /rpc  { method: "eth_sendUserOperation", params: [userOp, entryPoint] }
   |
   v
 Servo API --> forwards to Bundler
@@ -72,7 +75,6 @@ EntryPoint reimburses the bundler in ETH for gas spent
 | -------------------------------------- | ------------------------------------------------------------- |
 | `@agent-paymaster/api`                 | Hono API service (quotes, RPC gateway, rate limiting)         |
 | `@agent-paymaster/bundler`             | ERC-4337 bundler (gas estimation, mempool, bundle submission) |
-| `@agent-paymaster/sdk`                 | TypeScript client for agents                                  |
 | `@agent-paymaster/shared`              | Shared types and helpers                                      |
 | `@agent-paymaster/paymaster-contracts` | TaikoUsdcPaymaster Solidity contract (Foundry)                |
 | `@agent-paymaster/web`                 | Next.js landing page                                          |
@@ -134,8 +136,7 @@ pnpm dev
 
 `@agent-paymaster/api` exposes:
 
-- `POST /rpc`: unified JSON-RPC endpoint (`eth_*` proxied to bundler, `pm_*` handled by paymaster quote service).
-- `POST /v1/paymaster/quote`: returns paymaster data + USDC-denominated max gas cost.
+- `POST /rpc`: unified JSON-RPC endpoint (`eth_*` proxied to bundler, `pm_*` handled by paymaster service).
 - `GET /health`: aggregate service health.
 - `GET /status`: runtime dependency/config status.
 - `GET /metrics`: Prometheus metrics.
@@ -174,7 +175,7 @@ The release workflow lives in `.github/workflows/release.yml`. It is intentional
 2. Validate that `CHANGELOG.md` contains a non-empty `## [vX.Y.Z] - YYYY-MM-DD` section.
 3. Re-run lint, format, tests, build, contract tests, and both Docker builds.
 4. Deploy `railway.bundler.json` to the Railway bundler service, then `railway.api.json` to the Railway API service.
-5. Wait for Railway `/health`, then smoke test `/status`, `/rpc`, and `/v1/paymaster/quote`.
+5. Wait for Railway `/health`, then smoke test `/status`, `/rpc`, and `pm_getPaymasterData`.
 6. Deploy `packages/web` to Vercel production, wait for the public production URL, and smoke test the live site over anonymous HTTP.
 7. Create or update the GitHub Release using the matching changelog section.
 8. Opt GitHub JavaScript actions into Node 24 and use the current official action majors so release runs stay ahead of the June 2026 runner default.

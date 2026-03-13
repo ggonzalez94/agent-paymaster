@@ -39,12 +39,12 @@ export function Cta() {
                 </svg>
               </a>
               <a
-                href="https://www.npmjs.com/package/@agent-paymaster/sdk"
+                href="https://github.com/ggonzalez94/agent-paymaster"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 rounded-xl border border-surface-200 bg-surface-50 px-7 py-3.5 text-sm font-semibold text-surface-700 transition-all hover:border-surface-300 hover:bg-surface-100"
               >
-                View the SDK
+                View on GitHub
               </a>
             </div>
           </div>

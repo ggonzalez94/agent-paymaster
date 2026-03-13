@@ -60,35 +60,3 @@ paths:
           description: Invalid request
         "429":
           description: Rate limited
-  /v1/paymaster/quote:
-    post:
-      summary: Generate USDC paymaster quote
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [entryPoint, userOperation]
-              properties:
-                sender:
-                  type: string
-                chain:
-                  type: string
-                  enum: [taikoMainnet, taikoHekla, taikoHoodi]
-                chainId:
-                  type: integer
-                entryPoint:
-                  type: string
-                token:
-                  type: string
-                  enum: [USDC]
-                userOperation:
-                  type: object
-      responses:
-        "200":
-          description: Quote payload including fully packed paymasterAndData, raw paymasterData, bound gas fields, and USDC estimate
-        "400":
-          description: Invalid payload or gas estimation failure
-        "429":
-          description: Rate limited

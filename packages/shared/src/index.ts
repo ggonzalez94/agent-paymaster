@@ -19,6 +19,59 @@ export const buildHealth = (service: string): ServiceHealth => ({
   timestamp: new Date().toISOString(),
 });
 
+/** ABI parameter layout for TaikoUsdcPaymaster paymasterData (quote + signature + permit). */
+export const PAYMASTER_DATA_PARAMETERS = [
+  {
+    type: "tuple",
+    name: "quote",
+    components: [
+      { name: "token", type: "address" },
+      { name: "exchangeRate", type: "uint256" },
+      { name: "maxTokenCost", type: "uint256" },
+      { name: "validAfter", type: "uint48" },
+      { name: "validUntil", type: "uint48" },
+      { name: "postOpOverheadGas", type: "uint32" },
+      { name: "surchargeBps", type: "uint16" },
+    ],
+  },
+  {
+    type: "bytes",
+    name: "quoteSignature",
+  },
+  {
+    type: "tuple",
+    name: "permit",
+    components: [
+      { name: "value", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "signature", type: "bytes" },
+    ],
+  },
+] as const;
+
+/** EIP-712 types for the SponsoredUserOperation quote signature. */
+export const SPONSORED_USER_OPERATION_TYPES = {
+  SponsoredUserOperation: [
+    { name: "sender", type: "address" },
+    { name: "nonce", type: "uint256" },
+    { name: "initCodeHash", type: "bytes32" },
+    { name: "callDataHash", type: "bytes32" },
+    { name: "accountGasLimits", type: "bytes32" },
+    { name: "paymasterGasLimits", type: "bytes32" },
+    { name: "preVerificationGas", type: "uint256" },
+    { name: "gasFees", type: "bytes32" },
+    { name: "token", type: "address" },
+    { name: "exchangeRate", type: "uint256" },
+    { name: "maxTokenCost", type: "uint256" },
+    { name: "validAfter", type: "uint48" },
+    { name: "validUntil", type: "uint48" },
+    { name: "postOpOverheadGas", type: "uint32" },
+    { name: "surchargeBps", type: "uint16" },
+    { name: "chainId", type: "uint256" },
+    { name: "paymaster", type: "address" },
+  ],
+} as const;
+
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;
 const UINT128_MAX = (1n << 128n) - 1n;
