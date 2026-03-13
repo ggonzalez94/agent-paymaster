@@ -30,6 +30,16 @@ Format:
 
 - None yet.
 
+## [v0.1.1] - 2026-03-13
+
+### Fixed
+
+- Made the root `pnpm test` command build workspace packages before running Vitest so release verification works on clean Linux checkouts and fresh clones.
+
+### Docs
+
+- Generalized the release examples in `README.md` and clarified the clean-checkout test behavior in `Agents.md`.
+
 ## [v0.1.0] - 2026-03-13
 
 ### Added
@@ -53,5 +63,6 @@ Format:
 
 - Documented the release contract, required GitHub Actions variables and secrets, and the Railway plus Vercel deployment flow in `README.md` and `Agents.md`.
 
-[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.1.1...HEAD
+[v0.1.1]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.1
 [v0.1.0]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.0

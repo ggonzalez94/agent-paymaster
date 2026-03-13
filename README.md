@@ -96,16 +96,16 @@ Cut a release:
 ```bash
 # 1. Update package.json, packages/api/src/openapi.ts, and docs/api-openapi.yaml
 # 2. Add a matching section to CHANGELOG.md
-git commit -am "chore(release): cut v0.1.0"
-git tag v0.1.0
+git commit -am "chore(release): cut vX.Y.Z"
+git tag vX.Y.Z
 git push origin main --follow-tags
 ```
 
 Common release helpers:
 
 ```bash
-pnpm release:validate-version v0.1.0
-pnpm release:notes v0.1.0
+pnpm release:validate-version vX.Y.Z
+pnpm release:notes vX.Y.Z
 SMOKE_API_BASE_URL=https://api.example.com pnpm smoke:deploy
 ```
 
@@ -118,6 +118,8 @@ pnpm test
 pnpm build
 pnpm test:contracts
 ```
+
+`pnpm test` builds the workspace packages first so a fresh clone exercises the same module resolution path as GitHub Actions.
 
 Run services locally:
 

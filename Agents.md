@@ -11,7 +11,7 @@ pnpm install          # install all deps
 pnpm check            # release verification gate
 pnpm build            # build everything (except contracts)
 pnpm dev              # run api + bundler + shared in watch mode
-pnpm test             # all TypeScript tests (Vitest)
+pnpm test             # build workspace packages, then run all TypeScript tests
 pnpm test:contracts   # Solidity tests (Forge)
 pnpm lint             # lint all packages
 pnpm release:notes    # print a tagged CHANGELOG.md section
@@ -134,7 +134,7 @@ Required GitHub Actions secrets:
 
 ## Common Pitfalls
 
-- **Build order matters**: `shared` must build before `api`, `bundler`, or `sdk`. `pnpm build` handles this via workspace deps, but if building individually, build `shared` first.
+- **Build order matters**: `shared` must build before `api`, `bundler`, or `sdk`. The root `pnpm build` and `pnpm test` commands handle this, but if you run package scripts directly on a fresh clone, build dependencies first.
 - **Submodules**: contract tests fail without submodules. Use `git submodule update --init --recursive` if you didn't clone with `--recurse-submodules`.
 - **SQLite WAL**: the bundler and API share a SQLite volume. Don't delete `./data/` while services are running.
 - **Quote TTL**: quotes expire (default 90s). Tests that hold quotes too long will fail on-chain.
