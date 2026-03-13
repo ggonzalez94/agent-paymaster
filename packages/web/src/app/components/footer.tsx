@@ -24,19 +24,25 @@ export function Footer() {
           </div>
           <div className="flex items-center gap-6">
             <a
-              href="#"
-              className="text-sm text-surface-500 transition-colors hover:text-surface-700"
-            >
-              Docs
-            </a>
-            <a
-              href="#"
+              href="https://github.com/ggonzalez94/agent-paymaster"
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-sm text-surface-500 transition-colors hover:text-surface-700"
             >
               GitHub
             </a>
             <a
-              href="#"
+              href="https://www.npmjs.com/package/@agent-paymaster/sdk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-surface-500 transition-colors hover:text-surface-700"
+            >
+              SDK
+            </a>
+            <a
+              href="https://api-production-cdfe.up.railway.app/health"
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-sm text-surface-500 transition-colors hover:text-surface-700"
             >
               Status

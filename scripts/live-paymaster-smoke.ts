@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { packPaymasterAndData } from "@agent-paymaster/shared";
 import {
   concatHex,
   createPublicClient,
@@ -26,6 +27,12 @@ import {
   type QuoteResponse,
   type UserOperation,
 } from "../packages/sdk/src/index.ts";
+import {
+  ChainlinkOracleSource,
+  CoinbaseOracleSource,
+  CompositePriceProvider,
+  KrakenOracleSource,
+} from "../packages/api/src/price-provider.ts";
 
 const ENTRY_POINT_ABI = parseAbi([
   "function getUserOpHash((address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData,bytes signature) userOp) view returns (bytes32)",
@@ -105,19 +112,6 @@ const toHexQuantity = (value: bigint): Hex => toHex(value);
 const packUint128Pair = (first: bigint, second: bigint): Hex =>
   concatHex([toUint128Hex(first), toUint128Hex(second)]) as Hex;
 
-const buildPackedPaymasterAndData = (
-  paymaster: Address,
-  verificationGasLimit: bigint,
-  postOpGasLimit: bigint,
-  paymasterData: Hex,
-): Hex =>
-  concatHex([
-    paymaster,
-    toUint128Hex(verificationGasLimit),
-    toUint128Hex(postOpGasLimit),
-    paymasterData,
-  ]) as Hex;
-
 const formatUsdcMicros = (value: bigint): string => formatUnits(value, 6);
 
 const artifactPath = resolve(
@@ -149,7 +143,7 @@ const paymasterAddress = getAddress(
 );
 const quoteTtlSeconds = Number(process.env.PAYMASTER_QUOTE_TTL_SECONDS ?? "90");
 const surchargeBps = BigInt(process.env.PAYMASTER_SURCHARGE_BPS ?? "500");
-const usdcPerEthMicros = BigInt(process.env.PAYMASTER_STATIC_USDC_PER_ETH_MICROS ?? "2500000000");
+const smokePriceOverride = process.env.SMOKE_USDC_PER_ETH_MICROS;
 
 const publicClient = createPublicClient({
   chain: {
@@ -171,6 +165,21 @@ const walletClient = createWalletClient({
   transport: http(rpcUrl),
 });
 
+const resolveUsdcPerEthMicros = async (): Promise<bigint> => {
+  if (smokePriceOverride !== undefined) {
+    return BigInt(smokePriceOverride);
+  }
+
+  const provider = new CompositePriceProvider({
+    primary: new ChainlinkOracleSource({
+      ethereumRpcUrl: process.env.ETHEREUM_MAINNET_RPC_URL ?? "https://ethereum-rpc.publicnode.com",
+    }),
+    fallbacks: [new CoinbaseOracleSource(), new KrakenOracleSource()],
+  });
+
+  return provider.getUsdcPerEthMicros("taikoMainnet");
+};
+
 const main = async () => {
   console.log("Smoke test configuration");
   console.log(`  deployer: ${deployerAccount.address}`);
@@ -179,6 +188,9 @@ const main = async () => {
   console.log(`  entryPoint: ${entryPointAddress}`);
   console.log(`  paymaster: ${paymasterAddress}`);
   console.log(`  usdc: ${usdcAddress}`);
+
+  const usdcPerEthMicros = await resolveUsdcPerEthMicros();
+  console.log(`  oracle price: ${formatUsdcMicros(usdcPerEthMicros)} USDC/ETH`);
 
   const deployHash = await walletClient.deployContract({
     abi: accountAbi,
@@ -230,7 +242,7 @@ const main = async () => {
   const estimatedGasWei = totalGasLimit * maxFeePerGas;
   const baseMicros = (estimatedGasWei * usdcPerEthMicros) / WEI_PER_ETH;
   const maxTokenCostMicros =
-    ((baseMicros * (BASIS_POINTS_SCALE + surchargeBps)) + (BASIS_POINTS_SCALE - 1n)) /
+    (baseMicros * (BASIS_POINTS_SCALE + surchargeBps) + (BASIS_POINTS_SCALE - 1n)) /
     BASIS_POINTS_SCALE;
   const validAfter = BigInt(Math.floor(Date.now() / 1000));
   const validUntil = validAfter + BigInt(quoteTtlSeconds);
@@ -298,7 +310,12 @@ const main = async () => {
     token: "USDC",
     paymaster: paymasterAddress,
     paymasterData,
-    paymasterAndData: `${paymasterAddress}${paymasterData.slice(2)}` as Hex,
+    paymasterAndData: packPaymasterAndData({
+      paymaster: paymasterAddress,
+      paymasterVerificationGasLimit,
+      paymasterPostOpGasLimit,
+      paymasterData,
+    }) as Hex,
     callGasLimit: toHexQuantity(callGasLimit),
     verificationGasLimit: toHexQuantity(verificationGasLimit),
     preVerificationGas: toHexQuantity(preVerificationGas),
@@ -378,12 +395,7 @@ const main = async () => {
   );
 
   const quotedWithPermit = applyPermitToPaymasterQuote(quote, permit);
-  const packedPaymasterAndData = buildPackedPaymasterAndData(
-    paymasterAddress,
-    paymasterVerificationGasLimit,
-    paymasterPostOpGasLimit,
-    quotedWithPermit.paymasterData,
-  );
+  const packedPaymasterAndData = quotedWithPermit.paymasterAndData;
 
   const packedForHash = {
     sender: accountAddress,

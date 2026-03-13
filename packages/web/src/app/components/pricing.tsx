@@ -7,7 +7,7 @@ export function Pricing() {
             Simple, transparent pricing
           </h2>
           <p className="mt-4 text-lg text-surface-500">
-            Pay per operation. No subscriptions. No commitments.
+            Pay per operation. No subscriptions. No signup required.
           </p>
         </div>
 
@@ -22,14 +22,14 @@ export function Pricing() {
               <span className="text-surface-500">/month</span>
             </div>
             <p className="mt-4 text-sm text-surface-500">
-              Get started without a credit card. Perfect for testing and low-volume agents.
+              Start building immediately. No signup, no API keys — just call the endpoint.
             </p>
             <ul className="mt-8 space-y-3">
               {[
                 "1,000 UserOps per month",
                 "Full bundler + paymaster access",
-                "Standard gas estimation",
-                "Community support",
+                "Gas estimation included",
+                "No signup required",
               ].map((item) => (
                 <li key={item} className="flex items-center gap-3 text-sm">
                   <svg
@@ -48,14 +48,14 @@ export function Pricing() {
               ))}
             </ul>
             <a
-              href="#"
+              href="#integrate"
               className="mt-8 block rounded-xl border border-surface-200 py-3 text-center text-sm font-semibold text-surface-700 transition-all hover:border-surface-300 hover:bg-surface-100"
             >
               Start free
             </a>
           </div>
 
-          {/* Standard tier */}
+          {/* Pay-per-use tier */}
           <div className="relative rounded-2xl border border-servo-500/30 bg-surface-50 p-8 shadow-lg shadow-servo-500/5">
             <div className="absolute -top-3 right-8">
               <span className="rounded-full bg-servo-500 px-3 py-1 text-xs font-semibold text-white">
@@ -63,22 +63,21 @@ export function Pricing() {
               </span>
             </div>
             <div className="text-sm font-semibold uppercase tracking-wider text-servo-400">
-              Standard
+              Pay-per-use
             </div>
             <div className="mt-4 flex items-baseline gap-1">
               <span className="text-4xl font-extrabold text-surface-900">5%</span>
               <span className="text-surface-500">gas surcharge</span>
             </div>
             <p className="mt-4 text-sm text-surface-500">
-              Pay-per-use after the free tier. Settled on-chain in USDC — no invoices, no billing
-              cycles.
+              After the free tier. Settled on-chain in USDC — no invoices, no billing cycles.
             </p>
             <ul className="mt-8 space-y-3">
               {[
                 "Unlimited UserOps",
-                "Priority bundling",
-                "Real-time gas estimation",
-                "Volume discounts at scale",
+                "Same bundler + paymaster",
+                "Settled on-chain in USDC",
+                "No invoices or billing",
               ].map((item) => (
                 <li key={item} className="flex items-center gap-3 text-sm">
                   <svg
@@ -97,7 +96,7 @@ export function Pricing() {
               ))}
             </ul>
             <a
-              href="#"
+              href="#integrate"
               className="mt-8 block rounded-xl bg-servo-500 py-3 text-center text-sm font-semibold text-white transition-all hover:bg-servo-600"
             >
               Get started

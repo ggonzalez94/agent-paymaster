@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
 
+import { packPaymasterAndData } from "@agent-paymaster/shared";
 import { concatHex, encodeAbiParameters, keccak256, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import type { BundlerClient } from "./bundler-client.js";
+import type { PriceProvider } from "./price-provider.js";
 import { type JsonRpcRequest, isJsonRpcFailure, isObject } from "./types.js";
+
+export type { PriceProvider } from "./price-provider.js";
+export { StaticPriceProvider } from "./price-provider.js";
 
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_QUANTITY_PATTERN = /^0x[0-9a-fA-F]+$/;
@@ -169,31 +174,6 @@ export interface PaymasterQuote {
   entryPoint: string;
   sender: string;
   tokenAddress: string;
-}
-
-export interface PriceProvider {
-  getUsdcPerEthMicros(chain: ChainName): bigint | Promise<bigint>;
-  describe(): string;
-}
-
-export class StaticPriceProvider implements PriceProvider {
-  private readonly usdcPerEthMicros: bigint;
-
-  constructor(usdcPerEthMicros: bigint) {
-    if (usdcPerEthMicros <= 0n) {
-      throw new Error("Static price provider requires a positive usdcPerEthMicros value");
-    }
-
-    this.usdcPerEthMicros = usdcPerEthMicros;
-  }
-
-  getUsdcPerEthMicros(): bigint {
-    return this.usdcPerEthMicros;
-  }
-
-  describe(): string {
-    return "static";
-  }
 }
 
 export interface PaymasterServiceConfig {
@@ -649,8 +629,12 @@ export class PaymasterService {
       .digest("hex")
       .slice(0, QUOTE_ID_LENGTH);
 
-    const paymasterAndData =
-      `${this.config.paymasterAddress}${paymasterData.slice(2)}` as `0x${string}`;
+    const paymasterAndData = packPaymasterAndData({
+      paymaster: this.config.paymasterAddress as `0x${string}`,
+      paymasterVerificationGasLimit: gas.paymasterVerificationGasLimit,
+      paymasterPostOpGasLimit: gas.paymasterPostOpGasLimit,
+      paymasterData,
+    });
 
     return {
       quoteId,

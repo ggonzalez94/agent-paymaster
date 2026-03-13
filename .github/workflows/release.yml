@@ -1,0 +1,258 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Validate tag and release metadata
+        run: node scripts/validate-release-version.mjs "$GITHUB_REF_NAME"
+
+      - name: Validate changelog entry
+        run: node scripts/extract-changelog-section.mjs "$GITHUB_REF_NAME" > /dev/null
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Format check
+        run: pnpm format
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Setup Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Test contracts
+        run: pnpm test:contracts
+
+      - name: Build API image
+        run: docker build --tag servo-api:release .
+
+      - name: Build bundler image
+        run: docker build --file Dockerfile.bundler --tag servo-bundler:release .
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: ${{ vars.RAILWAY_API_BASE_URL }}
+
+    outputs:
+      web_deployment_url: ${{ steps.deploy-web.outputs.deployment_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Validate deploy configuration
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_API_SERVICE_ID: ${{ vars.RAILWAY_API_SERVICE_ID }}
+          RAILWAY_API_BASE_URL: ${{ vars.RAILWAY_API_BASE_URL }}
+          RAILWAY_BUNDLER_SERVICE_ID: ${{ vars.RAILWAY_BUNDLER_SERVICE_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+
+          for name in \
+            RAILWAY_API_TOKEN \
+            RAILWAY_PROJECT_ID \
+            RAILWAY_ENVIRONMENT_ID \
+            RAILWAY_API_SERVICE_ID \
+            RAILWAY_API_BASE_URL \
+            RAILWAY_BUNDLER_SERVICE_ID \
+            VERCEL_TOKEN \
+            VERCEL_ORG_ID \
+            VERCEL_PROJECT_ID
+          do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required GitHub Actions configuration: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Deploy bundler to Railway
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_BUNDLER_SERVICE_ID: ${{ vars.RAILWAY_BUNDLER_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          cp railway.bundler.json railway.json
+          pnpm dlx @railway/cli@latest up --ci \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID" \
+            --service "$RAILWAY_BUNDLER_SERVICE_ID" \
+            --message "Release $GITHUB_REF_NAME"
+
+      - name: Deploy API to Railway
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_API_SERVICE_ID: ${{ vars.RAILWAY_API_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          cp railway.api.json railway.json
+          pnpm dlx @railway/cli@latest up --ci \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID" \
+            --service "$RAILWAY_API_SERVICE_ID" \
+            --message "Release $GITHUB_REF_NAME"
+
+      - name: Wait for API health
+        env:
+          RAILWAY_API_BASE_URL: ${{ vars.RAILWAY_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          base_url="${RAILWAY_API_BASE_URL%/}"
+
+          for attempt in {1..20}; do
+            status_code="$(
+              curl \
+                --silent \
+                --show-error \
+                --location \
+                --output /tmp/servo-health.json \
+                --write-out '%{http_code}' \
+                "$base_url/health" || true
+            )"
+
+            if [ "$status_code" = "200" ]; then
+              cat /tmp/servo-health.json
+              exit 0
+            fi
+
+            echo "health check attempt $attempt/20 returned status $status_code"
+            sleep 15
+          done
+
+          echo "::error::API health check did not return 200 after deployment"
+          exit 1
+
+      - name: Smoke API and quote flow
+        env:
+          SMOKE_API_BASE_URL: ${{ vars.RAILWAY_API_BASE_URL }}
+          SMOKE_ENTRYPOINT_ADDRESS: "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
+          SMOKE_QUOTE_CHAIN: taikoMainnet
+        run: node scripts/deployment-smoke.mjs
+
+      - name: Deploy web to Vercel
+        id: deploy-web
+        working-directory: packages/web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          pnpm dlx vercel@latest pull --yes --environment=production --token "$VERCEL_TOKEN"
+          pnpm dlx vercel@latest build --prod --token "$VERCEL_TOKEN"
+          deployment_url="$(
+            pnpm dlx vercel@latest deploy --prebuilt --prod --token "$VERCEL_TOKEN" \
+              | tail -n 1 \
+              | tr -d '\r'
+          )"
+          echo "deployment_url=$deployment_url" >> "$GITHUB_OUTPUT"
+          echo "Deployed web to $deployment_url"
+
+      - name: Smoke Vercel production deployment
+        working-directory: packages/web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          html="$(pnpm dlx vercel@latest curl / --deployment '${{ steps.deploy-web.outputs.deployment_url }}' --token "$VERCEL_TOKEN")"
+          printf '%s' "$html" | grep -q "Servo — The Agent-Native Paymaster"
+
+  github-release:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build release notes
+        run: node scripts/extract-changelog-section.mjs "$GITHUB_REF_NAME" > RELEASE_NOTES.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "Servo $GITHUB_REF_NAME" \
+              --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Servo $GITHUB_REF_NAME" \
+              --notes-file RELEASE_NOTES.md \
+              --verify-tag
+          fi

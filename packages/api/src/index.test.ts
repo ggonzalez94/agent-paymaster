@@ -507,7 +507,17 @@ describe("api gateway", () => {
       validateConfig({
         PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY: TEST_QUOTE_SIGNER_PRIVATE_KEY,
         PAYMASTER_ADDRESS: TEST_PAYMASTER_ADDRESS,
-        PAYMASTER_STATIC_USDC_PER_ETH_MICROS: "3000000000",
+        USDC_MAINNET_ADDRESS: TEST_TOKEN_ADDRESS,
+      } as NodeJS.ProcessEnv),
+    ).not.toThrow();
+  });
+
+  it("accepts oracle mode when an Ethereum mainnet RPC is configured", () => {
+    expect(() =>
+      validateConfig({
+        PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+        PAYMASTER_ADDRESS: TEST_PAYMASTER_ADDRESS,
+        ETHEREUM_MAINNET_RPC_URL: "https://ethereum-rpc.example",
         USDC_MAINNET_ADDRESS: TEST_TOKEN_ADDRESS,
       } as NodeJS.ProcessEnv),
     ).not.toThrow();
@@ -518,8 +528,18 @@ describe("api gateway", () => {
       validateConfig({
         PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY: TEST_QUOTE_SIGNER_PRIVATE_KEY,
         PAYMASTER_ADDRESS: TEST_PAYMASTER_ADDRESS,
-        PAYMASTER_STATIC_USDC_PER_ETH_MICROS: "3000000000",
       } as NodeJS.ProcessEnv),
     ).toThrow("At least one USDC_*_ADDRESS must be configured");
+  });
+
+  it("rejects deprecated static pricing configuration", () => {
+    expect(() =>
+      validateConfig({
+        PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+        PAYMASTER_ADDRESS: TEST_PAYMASTER_ADDRESS,
+        PAYMASTER_STATIC_USDC_PER_ETH_MICROS: "3000000000",
+        USDC_MAINNET_ADDRESS: TEST_TOKEN_ADDRESS,
+      } as NodeJS.ProcessEnv),
+    ).toThrow("PAYMASTER_STATIC_USDC_PER_ETH_MICROS is no longer supported");
   });
 });

@@ -56,24 +56,6 @@ export interface JsonRpcFailure {
 
 export type JsonRpcResponse<T = unknown> = JsonRpcSuccess<T> | JsonRpcFailure;
 
-export interface PaymasterRpcResult {
-  paymaster: Address;
-  paymasterData: HexString;
-  paymasterAndData: HexString;
-  callGasLimit: HexString;
-  verificationGasLimit: HexString;
-  preVerificationGas: HexString;
-  paymasterVerificationGasLimit: HexString;
-  paymasterPostOpGasLimit: HexString;
-  quoteId: string;
-  token: "USDC";
-  tokenAddress: Address;
-  maxTokenCost: string;
-  maxTokenCostMicros: string;
-  validUntil: number;
-  isStub: boolean;
-}
-
 export interface QuoteRequest {
   sender?: Address;
   chain?: ChainName | number | `${number}`;
@@ -107,6 +89,30 @@ export interface QuoteResponse {
   supportedTokens: readonly ["USDC"] | "USDC"[];
 }
 
+export interface PaymasterRpcResult {
+  paymaster: Address;
+  paymasterData: HexString;
+  paymasterAndData: HexString;
+  callGasLimit: HexString;
+  verificationGasLimit: HexString;
+  preVerificationGas: HexString;
+  paymasterVerificationGasLimit: HexString;
+  paymasterPostOpGasLimit: HexString;
+  quoteId: string;
+  token: "USDC";
+  tokenAddress: Address;
+  maxTokenCost: string;
+  maxTokenCostMicros: string;
+  validUntil: number;
+  isStub: boolean;
+}
+
+export interface BundledPermitData {
+  value: bigint | number | `${number}`;
+  deadline: bigint | number | `${number}`;
+  signature: HexString;
+}
+
 export interface RateLimitErrorPayload {
   limit: number;
   resetAt: number;
@@ -119,18 +125,4 @@ export interface TransportConfig {
   headers?: Record<string, string>;
 }
 
-export interface BuildUserOperationInput {
-  sender: Address;
-  nonce: HexString;
-  callData: HexString;
-  maxFeePerGas: HexString;
-  maxPriorityFeePerGas: HexString;
-  signature?: HexString;
-  initCode?: HexString;
-  callGasLimit?: HexString;
-  verificationGasLimit?: HexString;
-  preVerificationGas?: HexString;
-  paymasterVerificationGasLimit?: HexString;
-  paymasterPostOpGasLimit?: HexString;
-  l1DataGas?: HexString;
-}
+export type ServoClientConfig = TransportConfig;

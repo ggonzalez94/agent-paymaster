@@ -41,7 +41,7 @@ export function Nav() {
             Compare
           </a>
           <a
-            href="#"
+            href="#integrate"
             className="rounded-lg bg-servo-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-servo-600"
           >
             Get started

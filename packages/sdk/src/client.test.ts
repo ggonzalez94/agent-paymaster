@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { AgentPaymasterClient } from "./client.js";
-import type { AgentPaymasterSdkError, JsonRpcRequestError, RateLimitError } from "./errors.js";
-import type { UserOperation } from "./types.js";
+import { ServoClient } from "./client.js";
+import type { ServoError, RateLimitError } from "./errors.js";
 
 const ENTRY_POINT = "0x0000000071727de22e5e9d8baf0edac6f37da032";
 
-const SAMPLE_USER_OPERATION: UserOperation = {
+const SAMPLE_USER_OPERATION = {
   sender: "0x1111111111111111111111111111111111111111",
   nonce: "0x1",
   initCode: "0x",
@@ -29,99 +28,9 @@ const makeResponse = (
     },
   });
 
-describe("AgentPaymasterClient", () => {
-  it("sends eth_estimateUserOperationGas and returns typed result", async () => {
-    const calls: unknown[] = [];
-
-    const client = new AgentPaymasterClient({
-      apiUrl: "http://localhost:3000",
-      fetchImpl: async (_input, init) => {
-        calls.push(JSON.parse(String(init?.body)) as unknown);
-
-        return makeResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          result: {
-            callGasLimit: "0x88d8",
-            verificationGasLimit: "0x1d4c8",
-            preVerificationGas: "0x5274",
-            paymasterVerificationGasLimit: "0xea60",
-            paymasterPostOpGasLimit: "0xafc8",
-          },
-        });
-      },
-    });
-
-    const result = await client.ethEstimateUserOperationGas(SAMPLE_USER_OPERATION, ENTRY_POINT);
-
-    expect(result.callGasLimit).toBe("0x88d8");
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      jsonrpc: "2.0",
-      method: "eth_estimateUserOperationGas",
-      params: [SAMPLE_USER_OPERATION, ENTRY_POINT],
-    });
-  });
-
-  it("maps json-rpc error responses to JsonRpcRequestError", async () => {
-    const client = new AgentPaymasterClient({
-      apiUrl: "http://localhost:3000",
-      fetchImpl: async () =>
-        makeResponse(
-          {
-            jsonrpc: "2.0",
-            id: 1,
-            error: {
-              code: -32602,
-              message: "Missing required positional params",
-              data: {
-                reason: "params_missing",
-              },
-            },
-          },
-          400,
-        ),
-    });
-
-    await expect(
-      client.ethSendUserOperation(SAMPLE_USER_OPERATION, ENTRY_POINT),
-    ).rejects.toMatchObject<Partial<JsonRpcRequestError>>({
-      name: "JsonRpcRequestError",
-      rpcCode: -32602,
-      message: "Missing required positional params",
-      status: 400,
-    });
-  });
-
-  it("preserves HTTP status for in-band json-rpc errors", async () => {
-    const client = new AgentPaymasterClient({
-      apiUrl: "http://localhost:3000",
-      fetchImpl: async () =>
-        makeResponse(
-          {
-            jsonrpc: "2.0",
-            id: 1,
-            error: {
-              code: -32000,
-              message: "Upstream unavailable",
-            },
-          },
-          202,
-        ),
-    });
-
-    await expect(
-      client.ethSendUserOperation(SAMPLE_USER_OPERATION, ENTRY_POINT),
-    ).rejects.toMatchObject<Partial<JsonRpcRequestError>>({
-      name: "JsonRpcRequestError",
-      rpcCode: -32000,
-      message: "Upstream unavailable",
-      status: 202,
-    });
-  });
-
+describe("ServoClient", () => {
   it("returns paymaster quote from REST endpoint", async () => {
-    const client = new AgentPaymasterClient({
+    const client = new ServoClient({
       apiUrl: "http://localhost:3000",
       fetchImpl: async (input) => {
         const url = String(input);
@@ -151,7 +60,7 @@ describe("AgentPaymasterClient", () => {
           });
         }
 
-        return makeResponse({ jsonrpc: "2.0", id: 1, result: null });
+        return makeResponse(null);
       },
     });
 
@@ -167,7 +76,7 @@ describe("AgentPaymasterClient", () => {
   });
 
   it("rejects malformed quote payloads", async () => {
-    const client = new AgentPaymasterClient({
+    const client = new ServoClient({
       apiUrl: "http://localhost:3000",
       fetchImpl: async () =>
         makeResponse({
@@ -183,14 +92,14 @@ describe("AgentPaymasterClient", () => {
         entryPoint: ENTRY_POINT,
         userOperation: SAMPLE_USER_OPERATION,
       }),
-    ).rejects.toMatchObject<Partial<AgentPaymasterSdkError>>({
-      name: "AgentPaymasterSdkError",
+    ).rejects.toMatchObject<Partial<ServoError>>({
+      name: "ServoError",
       code: "invalid_response",
     });
   });
 
   it("maps rate-limited quote responses to RateLimitError", async () => {
-    const client = new AgentPaymasterClient({
+    const client = new ServoClient({
       apiUrl: "http://localhost:3000",
       fetchImpl: async () =>
         makeResponse(

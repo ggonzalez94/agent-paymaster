@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 
+import { packPaymasterAndData } from "@agent-paymaster/shared";
 import {
   BundlerService,
   createBundlerApp,
@@ -202,6 +203,50 @@ describe("BundlerService", () => {
     expect(() =>
       service.sendUserOperation(buildUserOperation({ signature: "0x" }), ENTRY_POINT_V08),
     ).toThrow("signature must not be empty");
+  });
+
+  it("normalizes legacy and packed paymasterAndData to the same canonical userOp hash", () => {
+    const legacy = buildUserOperation({
+      paymasterVerificationGasLimit: "0xea60",
+      paymasterPostOpGasLimit: "0xafc8",
+      paymasterAndData: "0x9999999999999999999999999999999999999999abcd",
+    });
+
+    const hashFromLegacy = service.sendUserOperation(legacy, ENTRY_POINT_V08);
+    const hashFromPacked = service.sendUserOperation(
+      buildUserOperation({
+        paymasterVerificationGasLimit: "0xea60",
+        paymasterPostOpGasLimit: "0xafc8",
+        paymasterAndData: packPaymasterAndData({
+          paymaster: "0x9999999999999999999999999999999999999999",
+          paymasterVerificationGasLimit: 0xea60n,
+          paymasterPostOpGasLimit: 0xafc8n,
+          paymasterData: "0xabcd",
+        }),
+      }),
+      ENTRY_POINT_V08,
+    );
+
+    expect(hashFromPacked).toBe(hashFromLegacy);
+  });
+
+  it("derives missing paymaster gas limits from packed paymasterAndData", () => {
+    const hash = service.sendUserOperation(
+      buildUserOperation({
+        paymasterAndData: packPaymasterAndData({
+          paymaster: "0x9999999999999999999999999999999999999999",
+          paymasterVerificationGasLimit: 0xea60n,
+          paymasterPostOpGasLimit: 0xafc8n,
+          paymasterData: "0xabcd",
+        }),
+      }),
+      ENTRY_POINT_V08,
+    );
+
+    const lookup = service.getUserOperationByHash(hash);
+
+    expect(lookup?.userOperation.paymasterVerificationGasLimit).toBe("0xea60");
+    expect(lookup?.userOperation.paymasterPostOpGasLimit).toBe("0xafc8");
   });
 
   it("creates a bundle and publishes receipts after submission", () => {

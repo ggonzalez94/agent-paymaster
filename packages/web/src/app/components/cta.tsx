@@ -14,15 +14,15 @@ export function Cta() {
               Ready to build on Taiko?
             </h2>
             <p className="mx-auto mt-4 max-w-lg text-lg text-surface-500">
-              Start sending gasless UserOperations in minutes. Free tier included — no signup
+              Start sending UserOperations paid in USDC in minutes. Free tier included — no signup
               required.
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
               <a
-                href="#"
+                href="#integrate"
                 className="group inline-flex items-center gap-2 rounded-xl bg-servo-500 px-7 py-3.5 text-sm font-semibold text-white shadow-lg shadow-servo-500/25 transition-all hover:bg-servo-600 hover:shadow-servo-500/40"
               >
-                Get your API key
+                Start integrating
                 <svg
                   width="16"
                   height="16"
@@ -39,10 +39,12 @@ export function Cta() {
                 </svg>
               </a>
               <a
-                href="#"
+                href="https://www.npmjs.com/package/@agent-paymaster/sdk"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 rounded-xl border border-surface-200 bg-surface-50 px-7 py-3.5 text-sm font-semibold text-surface-700 transition-all hover:border-surface-300 hover:bg-surface-100"
               >
-                Read the docs
+                View the SDK
               </a>
             </div>
           </div>

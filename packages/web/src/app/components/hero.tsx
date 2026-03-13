@@ -36,7 +36,7 @@ export function Hero() {
         {/* CTAs */}
         <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <a
-            href="#"
+            href="#integrate"
             className="group inline-flex items-center gap-2 rounded-xl bg-servo-500 px-7 py-3.5 text-sm font-semibold text-white shadow-lg shadow-servo-500/25 transition-all hover:bg-servo-600 hover:shadow-servo-500/40"
           >
             Start building
@@ -68,7 +68,7 @@ export function Hero() {
           {[
             { value: "5%", label: "Gas surcharge" },
             { value: "1K", label: "Free ops/month" },
-            { value: "~2s", label: "Confirmation time" },
+            { value: "0 ETH", label: "Required" },
           ].map((stat) => (
             <div key={stat.label} className="text-center">
               <div className="text-2xl font-bold text-surface-900 md:text-3xl">{stat.value}</div>

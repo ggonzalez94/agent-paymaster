@@ -1,12 +1,22 @@
 import { decodeAbiParameters, encodeAbiParameters } from "viem";
 
-import { AgentPaymasterSdkError } from "./errors.js";
-import type { PermitSignature } from "./permit.js";
-import type { Address, HexString, PaymasterRpcResult, QuoteResponse } from "./types.js";
+import { ServoError } from "./errors.js";
+import type {
+  Address,
+  BundledPermitData,
+  HexString,
+  PaymasterRpcResult,
+  QuoteResponse,
+} from "./types.js";
 
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;
+const UINT128_MAX = (1n << 128n) - 1n;
 
+/**
+ * ABI layout of the Servo paymaster's `paymasterData` field.
+ * This is the contract-level encoding that must be preserved exactly.
+ */
 const PAYMASTER_DATA_PARAMETERS = [
   {
     type: "tuple",
@@ -52,25 +62,12 @@ interface DecodedPermitData {
   signature: HexString;
 }
 
-interface PaymasterQuoteLike {
-  paymaster: Address;
-  paymasterData: HexString;
-  paymasterAndData: HexString;
-  tokenAddress: Address;
-  maxTokenCostMicros: string;
-}
-
-export interface BundledPermitData {
-  value: bigint | number | `${number}`;
-  deadline: bigint | number | `${number}`;
-  signature: HexString;
-}
+// ── Inline helpers (avoid @agent-paymaster/shared dependency) ──
 
 const normalizeAddress = (value: string, fieldName: string): Address => {
   if (!ADDRESS_PATTERN.test(value)) {
-    throw new AgentPaymasterSdkError("invalid_address", `${fieldName} must be a valid address`);
+    throw new ServoError("invalid_address", `${fieldName} must be a valid address`);
   }
-
   return value as Address;
 };
 
@@ -80,15 +77,34 @@ const normalizeHexBytes = (
   { allowEmpty = true }: { allowEmpty?: boolean } = {},
 ): HexString => {
   if (!HEX_BYTES_PATTERN.test(value)) {
-    throw new AgentPaymasterSdkError("invalid_hex", `${fieldName} must be a hex string`);
+    throw new ServoError("invalid_hex", `${fieldName} must be a hex string`);
   }
-
   if (!allowEmpty && value === "0x") {
-    throw new AgentPaymasterSdkError("invalid_signature", `${fieldName} cannot be empty`);
+    throw new ServoError("invalid_signature", `${fieldName} cannot be empty`);
   }
-
   return value.toLowerCase() as HexString;
 };
+
+const toUint128Hex = (value: bigint, fieldName: string): string => {
+  if (value < 0n || value > UINT128_MAX) {
+    throw new ServoError("invalid_number", `${fieldName} exceeds uint128`);
+  }
+  return value.toString(16).padStart(32, "0");
+};
+
+const packPaymasterAndData = (
+  paymaster: Address,
+  verificationGasLimit: bigint,
+  postOpGasLimit: bigint,
+  paymasterData: HexString,
+): HexString =>
+  `${normalizeAddress(paymaster, "paymaster").toLowerCase()}${toUint128Hex(
+    verificationGasLimit,
+    "paymasterVerificationGasLimit",
+  )}${toUint128Hex(postOpGasLimit, "paymasterPostOpGasLimit")}${normalizeHexBytes(
+    paymasterData,
+    "paymasterData",
+  ).slice(2)}` as HexString;
 
 const toBigIntValue = (
   value: bigint | number | `${number}`,
@@ -100,91 +116,81 @@ const toBigIntValue = (
   try {
     parsed = BigInt(value);
   } catch {
-    throw new AgentPaymasterSdkError("invalid_number", `${fieldName} must be an integer value`);
+    throw new ServoError("invalid_number", `${fieldName} must be an integer value`);
   }
 
   if (parsed < 0n || (!allowZero && parsed === 0n)) {
-    throw new AgentPaymasterSdkError("invalid_number", `${fieldName} must be non-negative`);
+    throw new ServoError("invalid_number", `${fieldName} must be non-negative`);
   }
 
   return parsed;
 };
 
-const normalizeBundledPermit = (
-  permit: BundledPermitData | PermitSignature,
-  quote: PaymasterQuoteLike,
-): DecodedPermitData => {
-  const normalized = {
-    value: toBigIntValue(permit.value, "permit.value", { allowZero: false }),
-    deadline: toBigIntValue(permit.deadline, "permit.deadline"),
-    signature: normalizeHexBytes(permit.signature, "permit.signature", { allowEmpty: false }),
-  } satisfies DecodedPermitData;
+// ── Public API ──
 
-  const minPermitValue = BigInt(quote.maxTokenCostMicros);
-  if (normalized.value < minPermitValue) {
-    throw new AgentPaymasterSdkError(
-      "invalid_number",
-      "permit.value must cover at least quote.maxTokenCostMicros",
-    );
-  }
-
-  if ("typedData" in permit) {
-    const spender = normalizeAddress(permit.typedData.message.spender, "typedData.message.spender");
-    const verifyingContract = normalizeAddress(
-      permit.typedData.domain.verifyingContract,
-      "typedData.domain.verifyingContract",
-    );
-
-    if (spender.toLowerCase() !== quote.paymaster.toLowerCase()) {
-      throw new AgentPaymasterSdkError(
-        "invalid_paymaster_data",
-        "Permit spender does not match the paymaster address",
-      );
-    }
-
-    if (verifyingContract.toLowerCase() !== quote.tokenAddress.toLowerCase()) {
-      throw new AgentPaymasterSdkError(
-        "invalid_paymaster_data",
-        "Permit verifyingContract does not match the quote token address",
-      );
-    }
-  }
-
-  return normalized;
-};
-
-export const applyPermitToPaymasterQuote = <
-  TQuote extends QuoteResponse | PaymasterRpcResult,
->(
+/**
+ * Injects a signed EIP-2612 permit into a Servo quote's `paymasterData`.
+ *
+ * The Servo paymaster contract expects `paymasterData` to be ABI-encoded as
+ * `(QuoteStruct, quoteSignature, PermitStruct)`. The quote API returns this
+ * with an empty permit stub. This function decodes the data, replaces the
+ * stub with your actual permit, and re-encodes it.
+ *
+ * @param quote - A `QuoteResponse` from `ServoClient.getUsdcQuote()` or a
+ *   `PaymasterRpcResult` from the `pm_getPaymasterData` RPC method.
+ * @param permit - The signed permit data: `value`, `deadline`, and `signature`.
+ * @returns A new quote object with updated `paymasterData` and `paymasterAndData`.
+ */
+export const applyPermitToPaymasterQuote = <TQuote extends QuoteResponse | PaymasterRpcResult>(
   quote: TQuote,
-  permit: BundledPermitData | PermitSignature,
+  permit: BundledPermitData,
 ): TQuote => {
   const paymaster = normalizeAddress(quote.paymaster, "quote.paymaster");
   const paymasterData = normalizeHexBytes(quote.paymasterData, "quote.paymasterData");
 
-  const [quoteData, quoteSignature] = decodeAbiParameters(PAYMASTER_DATA_PARAMETERS, paymasterData) as [
-    DecodedQuoteData,
-    HexString,
-    DecodedPermitData,
-  ];
+  const [quoteData, quoteSignature] = decodeAbiParameters(
+    PAYMASTER_DATA_PARAMETERS,
+    paymasterData,
+  ) as [DecodedQuoteData, HexString, DecodedPermitData];
 
-  if (normalizeAddress(quoteData.token, "quoteData.token").toLowerCase() !== quote.tokenAddress.toLowerCase()) {
-    throw new AgentPaymasterSdkError(
+  if (
+    normalizeAddress(quoteData.token, "quoteData.token").toLowerCase() !==
+    quote.tokenAddress.toLowerCase()
+  ) {
+    throw new ServoError(
       "invalid_paymaster_data",
       "Quote token in paymasterData does not match quote.tokenAddress",
     );
   }
 
-  const nextPermit = normalizeBundledPermit(permit, quote);
+  const normalizedPermit: DecodedPermitData = {
+    value: toBigIntValue(permit.value, "permit.value", { allowZero: false }),
+    deadline: toBigIntValue(permit.deadline, "permit.deadline"),
+    signature: normalizeHexBytes(permit.signature, "permit.signature", { allowEmpty: false }),
+  };
+
+  const minPermitValue = BigInt(quote.maxTokenCostMicros);
+  if (normalizedPermit.value < minPermitValue) {
+    throw new ServoError(
+      "invalid_number",
+      "permit.value must cover at least quote.maxTokenCostMicros",
+    );
+  }
+
   const nextPaymasterData = encodeAbiParameters(PAYMASTER_DATA_PARAMETERS, [
     quoteData,
     quoteSignature,
-    nextPermit,
+    normalizedPermit,
   ]) as HexString;
 
   return {
     ...quote,
     paymasterData: nextPaymasterData,
-    paymasterAndData: `${paymaster}${nextPaymasterData.slice(2)}` as HexString,
+    paymasterAndData: packPaymasterAndData(
+      paymaster,
+      BigInt(quote.paymasterVerificationGasLimit),
+      BigInt(quote.paymasterPostOpGasLimit),
+      nextPaymasterData,
+    ),
   };
 };

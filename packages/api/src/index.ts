@@ -7,11 +7,13 @@ import { type BundlerClient, HttpBundlerClient } from "./bundler-client.js";
 import { logEvent } from "./logger.js";
 import { MetricsRegistry } from "./metrics.js";
 import { openApiDocument } from "./openapi.js";
+import { PaymasterService, type PaymasterServiceConfigInput } from "./paymaster-service.js";
 import {
-  PaymasterService,
-  StaticPriceProvider,
-  type PaymasterServiceConfigInput,
-} from "./paymaster-service.js";
+  ChainlinkOracleSource,
+  CoinbaseOracleSource,
+  CompositePriceProvider,
+  KrakenOracleSource,
+} from "./price-provider.js";
 import type { PersistenceStore } from "./persistence.js";
 import { FixedWindowRateLimiter, type RateLimitResult } from "./rate-limit.js";
 import {
@@ -53,6 +55,12 @@ export interface CreateAppOptions {
 const DEFAULT_BUNDLER_RPC_URL = "http://127.0.0.1:3001/rpc";
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/u;
+const DEFAULT_PRICE_CACHE_SECONDS = 15;
+const DEFAULT_MAX_DEVIATION_BPS = 75;
+const DEFAULT_ORACLE_HTTP_TIMEOUT_MS = 2_000;
+const DEFAULT_CHAINLINK_ETH_MAX_AGE_SECONDS = 7_200;
+const DEFAULT_CHAINLINK_USDC_MAX_AGE_SECONDS = 86_400;
+const DEFAULT_ETHEREUM_MAINNET_RPC_URL = "https://ethereum-rpc.publicnode.com";
 
 const parseIntWithFallback = (value: string | undefined, fallback: number): number => {
   if (value === undefined) {
@@ -61,19 +69,6 @@ const parseIntWithFallback = (value: string | undefined, fallback: number): numb
 
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-};
-
-const parseBigIntWithFallback = (value: string | undefined, fallback: bigint): bigint => {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  try {
-    const parsed = BigInt(value);
-    return parsed > 0n ? parsed : fallback;
-  } catch {
-    return fallback;
-  }
 };
 
 const parseOptionalAddress = (value: string | undefined): string | undefined => {
@@ -86,10 +81,8 @@ const parseOptionalAddress = (value: string | undefined): string | undefined => 
 
 const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig => {
   const bundlerRpcUrl = environment.BUNDLER_RPC_URL ?? DEFAULT_BUNDLER_RPC_URL;
-  const staticUsdcPerEthMicros = parseBigIntWithFallback(
-    environment.PAYMASTER_STATIC_USDC_PER_ETH_MICROS,
-    0n,
-  );
+  const ethereumMainnetRpcUrl =
+    environment.ETHEREUM_MAINNET_RPC_URL?.trim() || DEFAULT_ETHEREUM_MAINNET_RPC_URL;
   const tokenAddresses: NonNullable<PaymasterServiceConfigInput["tokenAddresses"]> = {};
 
   const mainnetToken = parseOptionalAddress(environment.USDC_MAINNET_ADDRESS);
@@ -107,6 +100,49 @@ const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig 
     tokenAddresses.taikoHoodi = hoodiToken;
   }
 
+  const priceProvider = new CompositePriceProvider({
+    primary: new ChainlinkOracleSource({
+      ethereumRpcUrl: ethereumMainnetRpcUrl,
+      ethUsdFeed: parseOptionalAddress(environment.PAYMASTER_CHAINLINK_ETH_USD_FEED) as
+        | `0x${string}`
+        | undefined,
+      usdcUsdFeed: parseOptionalAddress(environment.PAYMASTER_CHAINLINK_USDC_USD_FEED) as
+        | `0x${string}`
+        | undefined,
+      ethUsdMaxAgeMs:
+        parseIntWithFallback(
+          environment.PAYMASTER_CHAINLINK_ETH_USD_MAX_AGE_SECONDS,
+          DEFAULT_CHAINLINK_ETH_MAX_AGE_SECONDS,
+        ) * 1000,
+      usdcUsdMaxAgeMs:
+        parseIntWithFallback(
+          environment.PAYMASTER_CHAINLINK_USDC_USD_MAX_AGE_SECONDS,
+          DEFAULT_CHAINLINK_USDC_MAX_AGE_SECONDS,
+        ) * 1000,
+    }),
+    fallbacks: [
+      new CoinbaseOracleSource({
+        timeoutMs: parseIntWithFallback(
+          environment.PAYMASTER_ORACLE_HTTP_TIMEOUT_MS,
+          DEFAULT_ORACLE_HTTP_TIMEOUT_MS,
+        ),
+      }),
+      new KrakenOracleSource({
+        timeoutMs: parseIntWithFallback(
+          environment.PAYMASTER_ORACLE_HTTP_TIMEOUT_MS,
+          DEFAULT_ORACLE_HTTP_TIMEOUT_MS,
+        ),
+      }),
+    ],
+    cacheTtlMs:
+      parseIntWithFallback(environment.PAYMASTER_PRICE_CACHE_SECONDS, DEFAULT_PRICE_CACHE_SECONDS) *
+      1000,
+    maxPrimaryDeviationBps: parseIntWithFallback(
+      environment.PAYMASTER_ORACLE_MAX_DEVIATION_BPS,
+      DEFAULT_MAX_DEVIATION_BPS,
+    ),
+  });
+
   return {
     bundlerRpcUrl,
     bundlerHealthUrl: environment.BUNDLER_HEALTH_URL ?? bundlerRpcUrl.replace(/\/rpc$/u, "/health"),
@@ -123,8 +159,7 @@ const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig 
         | `0x${string}`
         | undefined,
       tokenAddresses,
-      priceProvider:
-        staticUsdcPerEthMicros > 0n ? new StaticPriceProvider(staticUsdcPerEthMicros) : undefined,
+      priceProvider,
     },
   };
 };
@@ -135,6 +170,10 @@ export const validateConfig = (environment: NodeJS.ProcessEnv = process.env): vo
     ["USDC_MAINNET_ADDRESS", environment.USDC_MAINNET_ADDRESS],
     ["USDC_HEKLA_ADDRESS", environment.USDC_HEKLA_ADDRESS],
     ["USDC_HOODI_ADDRESS", environment.USDC_HOODI_ADDRESS],
+  ];
+  const configuredOracleAddresses = [
+    ["PAYMASTER_CHAINLINK_ETH_USD_FEED", environment.PAYMASTER_CHAINLINK_ETH_USD_FEED],
+    ["PAYMASTER_CHAINLINK_USDC_USD_FEED", environment.PAYMASTER_CHAINLINK_USDC_USD_FEED],
   ];
 
   if (environment.PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY === undefined) {
@@ -149,13 +188,15 @@ export const validateConfig = (environment: NodeJS.ProcessEnv = process.env): vo
     errors.push("PAYMASTER_ADDRESS must be a valid 20-byte hex address");
   }
 
-  if (environment.PAYMASTER_STATIC_USDC_PER_ETH_MICROS === undefined) {
-    errors.push("PAYMASTER_STATIC_USDC_PER_ETH_MICROS is required");
-  } else {
-    const price = parseBigIntWithFallback(environment.PAYMASTER_STATIC_USDC_PER_ETH_MICROS, 0n);
-    if (price <= 0n) {
-      errors.push("PAYMASTER_STATIC_USDC_PER_ETH_MICROS must be greater than 0");
-    }
+  if (environment.PAYMASTER_STATIC_USDC_PER_ETH_MICROS !== undefined) {
+    errors.push("PAYMASTER_STATIC_USDC_PER_ETH_MICROS is no longer supported");
+  }
+
+  if (
+    environment.ETHEREUM_MAINNET_RPC_URL !== undefined &&
+    environment.ETHEREUM_MAINNET_RPC_URL.trim() === ""
+  ) {
+    errors.push("ETHEREUM_MAINNET_RPC_URL must not be empty");
   }
 
   let validTokenAddressCount = 0;
@@ -170,6 +211,12 @@ export const validateConfig = (environment: NodeJS.ProcessEnv = process.env): vo
     }
 
     validTokenAddressCount += 1;
+  }
+
+  for (const [name, value] of configuredOracleAddresses) {
+    if (value !== undefined && !ADDRESS_PATTERN.test(value)) {
+      errors.push(`${name} must be a valid 20-byte hex address`);
+    }
   }
 
   if (validTokenAddressCount === 0) {

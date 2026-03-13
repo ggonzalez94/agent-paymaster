@@ -65,7 +65,7 @@ Key routes (MVP):
 
 - `POST /v1/paymaster/quote`
   - Input: sender, chainId, entryPoint, gas fee params, token (`USDC`), permit payload.
-  - Output: paymaster fields plus the exact gas limits the signed quote is bound to (`callGasLimit`, `verificationGasLimit`, `preVerificationGas`, `paymasterVerificationGasLimit`, `paymasterPostOpGasLimit`, `validUntil`, `quoteId`).
+  - Output: fully packed on-chain `paymasterAndData`, raw `paymasterData`, and the exact gas limits the signed quote is bound to (`callGasLimit`, `verificationGasLimit`, `preVerificationGas`, `paymasterVerificationGasLimit`, `paymasterPostOpGasLimit`, `validUntil`, `quoteId`).
 - `POST /rpc`
   - Proxy for `eth_sendUserOperation`, `eth_estimateUserOperationGas`, `eth_getUserOperationReceipt`, `eth_supportedEntryPoints`.
 - `GET /health`
@@ -91,6 +91,7 @@ Required runtime configuration:
 Responsibilities:
 
 - Compute max USDC charge from gas bounds and signed pricing policy.
+- Read ETH/USD and USDC/USD off-chain from Chainlink mainnet, with Coinbase and Kraken fallback quorum checks.
 - Sign quote payload (EIP-712) consumed by paymaster validation.
 - Enforce quote expiry, nonce uniqueness, and risk margins.
 
@@ -101,6 +102,7 @@ Inputs:
 Outputs:
 
 - signed quote fields embedded into `paymasterData`.
+- fully packed `paymasterAndData = paymaster || paymasterVerificationGasLimit || paymasterPostOpGasLimit || paymasterData`.
 
 ### 6.4 Indexer / Settlement Worker
 

@@ -10,14 +10,21 @@ export class AgentPaymasterSdkError extends Error {
   }
 }
 
-export class TransportError extends AgentPaymasterSdkError {
+export class ServoError extends AgentPaymasterSdkError {
+  constructor(code: string, message: string, cause?: unknown) {
+    super(code, message, cause);
+    this.name = "ServoError";
+  }
+}
+
+export class TransportError extends ServoError {
   constructor(message: string, cause?: unknown) {
     super("transport_error", message, cause);
     this.name = "TransportError";
   }
 }
 
-export class HttpRequestError extends AgentPaymasterSdkError {
+export class HttpRequestError extends ServoError {
   readonly status: number;
   readonly payload: unknown;
 

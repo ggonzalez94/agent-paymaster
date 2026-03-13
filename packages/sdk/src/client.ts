@@ -3,21 +3,22 @@ import {
   HttpRequestError,
   JsonRpcRequestError,
   RateLimitError,
+  ServoError,
   TransportError,
   getErrorMessage,
   isRateLimitPayload,
 } from "./errors.js";
 import type {
+  Address,
   ChainName,
   JsonRpcFailure,
   JsonRpcResponse,
-  PaymasterRpcResult,
-  QuoteRequest,
   QuoteResponse,
   RateLimitErrorPayload,
   TransportConfig,
   UserOperation,
   UserOperationGasEstimate,
+  PaymasterRpcResult,
 } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -111,12 +112,6 @@ const withTimeout = async <T>(
 
 const normalizeApiUrl = (apiUrl: string): string => apiUrl.replace(/\/+$/u, "");
 
-interface JsonRequestResult {
-  status: number;
-  headers: Headers;
-  body: unknown;
-}
-
 const isQuoteResponse = (value: unknown): value is QuoteResponse => {
   if (!isObject(value)) {
     return false;
@@ -154,6 +149,21 @@ const isQuoteResponse = (value: unknown): value is QuoteResponse => {
     supportedTokensValid
   );
 };
+
+interface QuoteApiRequest {
+  sender?: Address;
+  chain?: ChainName | number | `${number}`;
+  chainId?: number;
+  entryPoint: Address;
+  token?: "USDC";
+  userOperation: UserOperation;
+}
+
+interface JsonRequestResult {
+  status: number;
+  headers: Headers;
+  body: unknown;
+}
 
 export class AgentPaymasterClient {
   private readonly apiUrl: string;
@@ -203,14 +213,11 @@ export class AgentPaymasterClient {
     ]);
   }
 
-  async getUsdcQuote(request: QuoteRequest): Promise<QuoteResponse> {
+  async getUsdcQuote(request: QuoteApiRequest): Promise<QuoteResponse> {
     const response = await this.postJson("/v1/paymaster/quote", request);
 
     if (!isQuoteResponse(response.body)) {
-      throw new AgentPaymasterSdkError(
-        "invalid_response",
-        "Quote endpoint returned an invalid payload",
-      );
+      throw new ServoError("invalid_response", "Quote endpoint returned an invalid payload");
     }
 
     return response.body;
@@ -308,6 +315,8 @@ export class AgentPaymasterClient {
     };
   }
 }
+
+export class ServoClient extends AgentPaymasterClient {}
 
 export const isJsonRpcResponse = (value: unknown): value is JsonRpcResponse => {
   if (!isObject(value) || value.jsonrpc !== "2.0") {

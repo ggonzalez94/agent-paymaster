@@ -1,4 +1,4 @@
-import { buildHealth } from "@agent-paymaster/shared";
+import { buildHealth, normalizePaymasterAndData } from "@agent-paymaster/shared";
 import { serve } from "@hono/node-server";
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
@@ -942,6 +942,36 @@ export class BundlerService {
       userOperation.l1DataGas = parseHexField(userOperationInput.l1DataGas, "l1DataGas");
     }
 
+    if (userOperation.paymasterAndData !== undefined && userOperation.paymasterAndData !== "0x") {
+      try {
+        const normalized = normalizePaymasterAndData({
+          paymasterAndData: userOperation.paymasterAndData,
+          paymasterVerificationGasLimit:
+            userOperation.paymasterVerificationGasLimit === undefined
+              ? undefined
+              : hexToBigInt(userOperation.paymasterVerificationGasLimit),
+          paymasterPostOpGasLimit:
+            userOperation.paymasterPostOpGasLimit === undefined
+              ? undefined
+              : hexToBigInt(userOperation.paymasterPostOpGasLimit),
+        });
+
+        userOperation.paymasterAndData = normalized.paymasterAndData;
+        userOperation.paymasterVerificationGasLimit ??= bigIntToHex(
+          normalized.paymasterVerificationGasLimit,
+        );
+        userOperation.paymasterPostOpGasLimit ??= bigIntToHex(normalized.paymasterPostOpGasLimit);
+      } catch (error) {
+        throw new BundlerRpcError(
+          RPC_INVALID_PARAMS,
+          error instanceof Error ? error.message : "Invalid paymasterAndData",
+          {
+            reason: "paymaster_data_invalid",
+          },
+        );
+      }
+    }
+
     return userOperation;
   }
 
@@ -1055,28 +1085,7 @@ export class BundlerService {
           },
         );
       }
-
-      const paymasterAddress = `0x${userOperation.paymasterAndData.slice(2, 42)}` as HexString;
-      const paymasterData = `0x${userOperation.paymasterAndData.slice(42)}` as HexString;
-      const packedPaymasterAndData = concatHex([
-        paymasterAddress,
-        toHex(
-          toUint128(
-            hexToBigInt(userOperation.paymasterVerificationGasLimit),
-            "paymasterVerificationGasLimit",
-          ),
-          { size: 16 },
-        ),
-        toHex(
-          toUint128(
-            hexToBigInt(userOperation.paymasterPostOpGasLimit),
-            "paymasterPostOpGasLimit",
-          ),
-          { size: 16 },
-        ),
-        paymasterData,
-      ]);
-      packedPaymasterAndDataHash = keccak256(packedPaymasterAndData);
+      packedPaymasterAndDataHash = keccak256(userOperation.paymasterAndData);
     }
 
     const packedUserOp = encodeAbiParameters(

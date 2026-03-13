@@ -1,21 +1,17 @@
-export { AgentPaymasterClient, isJsonRpcResponse } from "./client.js";
-export {
-  applyPermitToPaymasterQuote,
-  type BundledPermitData,
-} from "./paymaster-data.js";
+export { AgentPaymasterClient, ServoClient, isJsonRpcResponse } from "./client.js";
+export { applyPermitToPaymasterQuote } from "./paymaster-data.js";
 export {
   AgentPaymasterSdkError,
   HttpRequestError,
   JsonRpcRequestError,
   RateLimitError,
+  ServoError,
   TransportError,
 } from "./errors.js";
-export { buildPermitTypedData, createPermitSignature } from "./permit.js";
-export { UserOperationBuilder, applyPaymasterData, buildUserOperation } from "./userop-builder.js";
 
 export type {
   Address,
-  BuildUserOperationInput,
+  BundledPermitData,
   ChainName,
   HexString,
   JsonRpcErrorObject,
@@ -27,14 +23,9 @@ export type {
   PaymasterRpcResult,
   QuoteRequest,
   QuoteResponse,
+  RateLimitErrorPayload,
+  ServoClientConfig,
   TransportConfig,
   UserOperation,
   UserOperationGasEstimate,
 } from "./types.js";
-
-export type {
-  BuildPermitRequest,
-  PermitSignature,
-  PermitSigner,
-  PermitTypedData,
-} from "./permit.js";

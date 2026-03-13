@@ -4,9 +4,13 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.32.1",
   "scripts": {
+    "check": "pnpm lint && pnpm format && pnpm test && pnpm build && pnpm test:contracts",
     "build": "pnpm -r --filter '!@agent-paymaster/paymaster-contracts' build",
     "dev": "pnpm --parallel --filter @agent-paymaster/shared --filter @agent-paymaster/api --filter @agent-paymaster/bundler dev",
     "lint": "pnpm -r --if-present --filter '!@agent-paymaster/paymaster-contracts' lint",
+    "release:notes": "node scripts/extract-changelog-section.mjs",
+    "release:validate-version": "node scripts/validate-release-version.mjs",
+    "smoke:deploy": "node scripts/deployment-smoke.mjs",
     "test": "pnpm -r --filter '!@agent-paymaster/paymaster-contracts' test",
     "test:contracts": "pnpm --filter @agent-paymaster/paymaster-contracts test",
     "format": "prettier --check .",

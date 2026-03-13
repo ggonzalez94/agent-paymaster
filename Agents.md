@@ -8,11 +8,14 @@
 
 ```
 pnpm install          # install all deps
+pnpm check            # release verification gate
 pnpm build            # build everything (except contracts)
 pnpm dev              # run api + bundler + shared in watch mode
 pnpm test             # all TypeScript tests (Vitest)
 pnpm test:contracts   # Solidity tests (Forge)
 pnpm lint             # lint all packages
+pnpm release:notes    # print a tagged CHANGELOG.md section
+pnpm smoke:deploy     # smoke-test a live API deployment
 pnpm format:write     # auto-format
 ```
 
@@ -44,14 +47,14 @@ packages/
 
 ## API Endpoints
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| POST | `/v1/paymaster/quote` | Get signed USDC quote for a UserOp |
-| POST | `/rpc` | JSON-RPC gateway (`eth_*`, `pm_*` methods) |
-| GET | `/health` | Aggregate health check |
-| GET | `/status` | Runtime config + dependency status |
-| GET | `/metrics` | Prometheus metrics |
-| GET | `/openapi.json` | OpenAPI 3.1 spec |
+| Method | Path                  | Purpose                                    |
+| ------ | --------------------- | ------------------------------------------ |
+| POST   | `/v1/paymaster/quote` | Get signed USDC quote for a UserOp         |
+| POST   | `/rpc`                | JSON-RPC gateway (`eth_*`, `pm_*` methods) |
+| GET    | `/health`             | Aggregate health check                     |
+| GET    | `/status`             | Runtime config + dependency status         |
+| GET    | `/metrics`            | Prometheus metrics                         |
+| GET    | `/openapi.json`       | OpenAPI 3.1 spec                           |
 
 ## Contracts
 
@@ -69,6 +72,7 @@ Submodules: `account-abstraction`, `openzeppelin-contracts`, `forge-std`. Clone 
 ## Environment
 
 Copy `.env.example` → `.env`. Three vars are required to start:
+
 - `PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY` — signs EIP-712 quotes
 - `PAYMASTER_ADDRESS` — deployed contract address
 - `ETHEREUM_MAINNET_RPC_URL` — optional override for Chainlink oracle pricing (defaults to PublicNode public Ethereum RPC if unset)
@@ -83,6 +87,40 @@ Copy `.env.example` → `.env`. Three vars are required to start:
 - **Package manager**: pnpm 10.32.1 (workspaces)
 - **Tests**: Vitest (TS), Forge (Solidity)
 - **CI**: GitHub Actions — lint, format, build, test (TS + Solidity)
+- **Release**: semver tag push (`vX.Y.Z`) deploys Railway + Vercel, runs live smoke tests, then publishes the GitHub Release from `CHANGELOG.md`
+
+## Releases & Deployment
+
+Servo uses a tag-driven release workflow at `.github/workflows/release.yml`.
+
+Release contract:
+
+- Update `package.json`, `packages/api/src/openapi.ts`, and `docs/api-openapi.yaml` to the release version.
+- Add a non-empty `## [vX.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`.
+- Push the release tag with `git push origin main --follow-tags`.
+
+Workflow behavior:
+
+- Re-runs lint, format, TypeScript tests, builds, Solidity tests, and both Docker image builds.
+- Deploys the bundler with `railway.bundler.json`, then the API with `railway.api.json`.
+- Waits for API `/health`, then smoke tests `/status`, `/rpc`, and `/v1/paymaster/quote`.
+- Deploys `packages/web` to Vercel production and smoke tests the protected deployment with `vercel curl`.
+- Creates or updates the GitHub Release from the matching `CHANGELOG.md` section.
+
+Required GitHub Actions variables:
+
+- `RAILWAY_PROJECT_ID`
+- `RAILWAY_ENVIRONMENT_ID`
+- `RAILWAY_API_SERVICE_ID`
+- `RAILWAY_BUNDLER_SERVICE_ID`
+- `RAILWAY_API_BASE_URL`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+Required GitHub Actions secrets:
+
+- `RAILWAY_API_TOKEN`
+- `VERCEL_TOKEN`
 
 ## Conventions
 
@@ -102,21 +140,22 @@ Copy `.env.example` → `.env`. Three vars are required to start:
 - **Quote TTL**: quotes expire (default 90s). Tests that hold quotes too long will fail on-chain.
 - **Packed format**: ERC-4337 v0.8 uses packed UserOp format. Don't confuse with v0.7 struct layout.
 - **Docker**: two separate Dockerfiles — `Dockerfile` (API) and `Dockerfile.bundler`. Both expose `/health`.
+- **Railway config**: `railway.api.json` and `railway.bundler.json` are the in-repo service manifests used by the release workflow
 
 ## Config Defaults Worth Knowing
 
-| Var | Default | What |
-|-----|---------|------|
-| `PAYMASTER_SURCHARGE_BPS` | 500 | 5% surcharge on gas cost |
-| `PAYMASTER_QUOTE_TTL_SECONDS` | 90 | Quote validity window |
-| `RATE_LIMIT_MAX_REQUESTS` | 60 | Requests per window per sender |
-| `RATE_LIMIT_WINDOW_MS` | 60000 | Rate limit window (1 min) |
-| `REQUEST_TIMEOUT_MS` | 2500 | Upstream request timeout |
+| Var                           | Default | What                           |
+| ----------------------------- | ------- | ------------------------------ |
+| `PAYMASTER_SURCHARGE_BPS`     | 500     | 5% surcharge on gas cost       |
+| `PAYMASTER_QUOTE_TTL_SECONDS` | 90      | Quote validity window          |
+| `RATE_LIMIT_MAX_REQUESTS`     | 60      | Requests per window per sender |
+| `RATE_LIMIT_WINDOW_MS`        | 60000   | Rate limit window (1 min)      |
+| `REQUEST_TIMEOUT_MS`          | 2500    | Upstream request timeout       |
 
 ## Networks
 
-| Name | Chain ID | Status |
-|------|----------|--------|
-| Taiko Alethia (mainnet) | 167000 | Production |
-| Taiko Hoodi | 167013 | Testnet |
-| Taiko Hekla | 167009 | Testnet |
+| Name                    | Chain ID | Status     |
+| ----------------------- | -------- | ---------- |
+| Taiko Alethia (mainnet) | 167000   | Production |
+| Taiko Hoodi             | 167013   | Testnet    |
+| Taiko Hekla             | 167009   | Testnet    |
