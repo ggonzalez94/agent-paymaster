@@ -30,6 +30,27 @@ Format:
 
 - None yet.
 
+## [v0.2.0] - 2026-03-13
+
+### Changed
+
+- **BREAKING**: Removed the `@agent-paymaster/sdk` package. Agents now use standard ERC-7677 paymaster RPC methods (`pm_getPaymasterData`, `pm_getPaymasterStubData`) with pure viem — no proprietary SDK dependency needed.
+- **BREAKING**: Removed the `POST /v1/paymaster/quote` REST endpoint. All paymaster interaction now goes through the unified `/rpc` JSON-RPC gateway.
+- Added server-side EIP-2612 permit embedding via the ERC-7677 `context.permit` parameter — agents pass their permit in the RPC context and receive ready-to-use `paymasterData` with the permit already encoded.
+- Exported `PAYMASTER_DATA_PARAMETERS` and `SPONSORED_USER_OPERATION_TYPES` from `@agent-paymaster/shared` as canonical protocol-level ABI constants.
+- Removed the `PersistenceStore` quote-caching layer from the API gateway.
+
+### Fixed
+
+- Eliminated an encode-decode-reencode cycle on the `pm_getPaymasterData` hot path by refactoring `quote()` to accept an optional permit parameter.
+- Hoisted `resolveRouteLabel` route Set to module scope to avoid per-request allocation.
+- Added `parseDecimalBigInt` for validated permit input parsing, replacing unsafe `BigInt(String(...))` on untrusted context values.
+
+### Docs
+
+- Updated landing page code example, README, Agents.md, and OpenAPI specs to reflect the SDK-free ERC-7677 integration flow.
+- Updated deployment smoke scripts to use `pm_getPaymasterStubData` via `/rpc` instead of the removed REST endpoint.
+
 ## [v0.1.6] - 2026-03-13
 
 ### Fixed
@@ -98,7 +119,8 @@ Format:
 
 - Documented the release contract, required GitHub Actions variables and secrets, and the Railway plus Vercel deployment flow in `README.md` and `Agents.md`.
 
-[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.2.0
 [v0.1.6]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.6
 [v0.1.5]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.5
 [v0.1.4]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.4
