@@ -7,7 +7,6 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/api/package.json packages/api/
 COPY packages/bundler/package.json packages/bundler/
 COPY packages/shared/package.json packages/shared/
-COPY packages/sdk/package.json packages/sdk/
 RUN pnpm install --frozen-lockfile
 
 FROM base AS build
@@ -16,7 +15,6 @@ COPY tsconfig.base.json ./
 COPY packages/api packages/api
 COPY packages/bundler packages/bundler
 COPY packages/shared packages/shared
-COPY packages/sdk packages/sdk
 RUN pnpm build
 
 FROM base AS runtime
@@ -24,7 +22,6 @@ COPY --from=deps /app ./
 COPY --from=build /app/packages/api/dist ./packages/api/dist
 COPY --from=build /app/packages/bundler/dist ./packages/bundler/dist
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build /app/packages/sdk/dist ./packages/sdk/dist
 RUN mkdir -p /app/data
 EXPOSE 3000 3001
 ENV HEALTHCHECK_URL=http://localhost:3000/health
