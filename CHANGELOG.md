@@ -30,6 +30,12 @@ Format:
 
 - None yet.
 
+## [v0.1.5] - 2026-03-13
+
+### Fixed
+
+- Replaced `pnpm/action-setup@v4` with Corepack-based pnpm activation so the release workflow no longer depends on any Node 20 GitHub JavaScript actions.
+
 ## [v0.1.4] - 2026-03-13
 
 ### Fixed
@@ -86,7 +92,8 @@ Format:
 
 - Documented the release contract, required GitHub Actions variables and secrets, and the Railway plus Vercel deployment flow in `README.md` and `Agents.md`.
 
-[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.1.5...HEAD
+[v0.1.5]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.5
 [v0.1.4]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.4
 [v0.1.3]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.3
 [v0.1.2]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.1.2
