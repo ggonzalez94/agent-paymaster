@@ -32,12 +32,10 @@ export function Footer() {
               GitHub
             </a>
             <a
-              href="https://www.npmjs.com/package/@agent-paymaster/sdk"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="#integrate"
               className="text-sm text-surface-500 transition-colors hover:text-surface-700"
             >
-              SDK
+              Integrate
             </a>
             <a
               href="https://api-production-cdfe.up.railway.app/health"

@@ -71,40 +71,5 @@ export const openApiDocument = {
         },
       },
     },
-    "/v1/paymaster/quote": {
-      post: {
-        summary: "Estimate gas and return a signed USDC paymaster quote",
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                required: ["entryPoint", "userOperation"],
-                properties: {
-                  sender: { type: "string" },
-                  chain: { type: "string", enum: ["taikoMainnet", "taikoHekla", "taikoHoodi"] },
-                  chainId: { type: "integer" },
-                  entryPoint: { type: "string" },
-                  token: { type: "string", enum: ["USDC"] },
-                  userOperation: { type: "object" },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          "200": {
-            description: "Paymaster quote with bound gas fields and signed sponsorship terms",
-          },
-          "400": {
-            description: "Validation or estimation error",
-          },
-          "429": {
-            description: "Rate limited",
-          },
-        },
-      },
-    },
   },
 } as const;

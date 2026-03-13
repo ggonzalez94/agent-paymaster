@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { packPaymasterAndData } from "@agent-paymaster/shared";
+import {
+  packPaymasterAndData,
+  PAYMASTER_DATA_PARAMETERS,
+  SPONSORED_USER_OPERATION_TYPES,
+} from "@agent-paymaster/shared";
 import { concatHex, encodeAbiParameters, keccak256, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -20,57 +24,6 @@ const UINT128_MAX = (1n << 128n) - 1n;
 const UINT48_MAX = (1n << 48n) - 1n;
 const UINT32_MAX = (1n << 32n) - 1n;
 const UINT16_MAX = (1n << 16n) - 1n;
-
-const PAYMASTER_DATA_PARAMETERS = [
-  {
-    type: "tuple",
-    name: "quote",
-    components: [
-      { name: "token", type: "address" },
-      { name: "exchangeRate", type: "uint256" },
-      { name: "maxTokenCost", type: "uint256" },
-      { name: "validAfter", type: "uint48" },
-      { name: "validUntil", type: "uint48" },
-      { name: "postOpOverheadGas", type: "uint32" },
-      { name: "surchargeBps", type: "uint16" },
-    ],
-  },
-  {
-    type: "bytes",
-    name: "quoteSignature",
-  },
-  {
-    type: "tuple",
-    name: "permit",
-    components: [
-      { name: "value", type: "uint256" },
-      { name: "deadline", type: "uint256" },
-      { name: "signature", type: "bytes" },
-    ],
-  },
-] as const;
-
-const SPONSORED_USER_OPERATION_TYPES = {
-  SponsoredUserOperation: [
-    { name: "sender", type: "address" },
-    { name: "nonce", type: "uint256" },
-    { name: "initCodeHash", type: "bytes32" },
-    { name: "callDataHash", type: "bytes32" },
-    { name: "accountGasLimits", type: "bytes32" },
-    { name: "paymasterGasLimits", type: "bytes32" },
-    { name: "preVerificationGas", type: "uint256" },
-    { name: "gasFees", type: "bytes32" },
-    { name: "token", type: "address" },
-    { name: "exchangeRate", type: "uint256" },
-    { name: "maxTokenCost", type: "uint256" },
-    { name: "validAfter", type: "uint48" },
-    { name: "validUntil", type: "uint48" },
-    { name: "postOpOverheadGas", type: "uint32" },
-    { name: "surchargeBps", type: "uint16" },
-    { name: "chainId", type: "uint256" },
-    { name: "paymaster", type: "address" },
-  ],
-} as const;
 
 interface QuoteData {
   token: `0x${string}`;
@@ -232,6 +185,18 @@ const parseBytes = (value: unknown, fieldName: string): `0x${string}` => {
   }
 
   return value.toLowerCase() as `0x${string}`;
+};
+
+const parseDecimalBigInt = (value: unknown, fieldName: string): bigint => {
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error(`${fieldName} must be a string or number`);
+  }
+
+  try {
+    return BigInt(value);
+  } catch {
+    throw new Error(`${fieldName} must be a valid integer`);
+  }
 };
 
 const toHexQuantity = (value: bigint): `0x${string}` => {
@@ -486,28 +451,7 @@ export class PaymasterService {
     };
   }
 
-  buildQuoteRequestKey(input: unknown): string {
-    const parsed = parseQuoteInput(input);
-
-    const stablePayload = {
-      sender: parsed.sender,
-      entryPoint: parsed.entryPoint,
-      chainId: parsed.chain.chainId,
-      token: parsed.token,
-      userOperation: {
-        nonce: parsed.userOperationNonce.toString(),
-        initCode: parsed.initCode,
-        callData: parsed.callData,
-        maxFeePerGas: parsed.maxFeePerGas.toString(),
-        maxPriorityFeePerGas: parsed.maxPriorityFeePerGas.toString(),
-        l1DataGas: String(parsed.userOperation.l1DataGas ?? "0x"),
-      },
-    };
-
-    return createHash("sha256").update(JSON.stringify(stablePayload)).digest("hex");
-  }
-
-  async quote(input: unknown): Promise<PaymasterQuote> {
+  async quote(input: unknown, permit: PermitData = EMPTY_PERMIT): Promise<PaymasterQuote> {
     const parsed = parseQuoteInput(input);
     const tokenAddress = this.config.tokenAddresses[parsed.chain.name];
 
@@ -549,6 +493,12 @@ export class PaymasterService {
       (baseMicros * BigInt(10_000 + this.config.surchargeBps) + BigInt(10_000 - 1)) /
       BigInt(10_000);
     const maxTokenCostMicros = grossMicros > 0n ? grossMicros : 1n;
+
+    if (permit !== EMPTY_PERMIT && permit.value < maxTokenCostMicros) {
+      throw new Error(
+        `Permit value ${permit.value} is less than maxTokenCost ${maxTokenCostMicros}`,
+      );
+    }
 
     const validAfterSeconds = Math.floor(this.nowMs() / 1000);
     const validUntilSeconds = validAfterSeconds + this.config.quoteTtlSeconds;
@@ -621,7 +571,7 @@ export class PaymasterService {
     const paymasterData = encodeAbiParameters(PAYMASTER_DATA_PARAMETERS, [
       quoteData,
       quoteSignature,
-      EMPTY_PERMIT,
+      permit,
     ]) as `0x${string}`;
 
     const quoteId = createHash("sha256")
@@ -669,15 +619,32 @@ export class PaymasterService {
       throw new Error("Paymaster RPC params must be [userOperation, entryPoint, chain]");
     }
 
-    const [userOperation, entryPoint, chainMaybe] = params;
+    const [userOperation, entryPoint, chainMaybe, contextMaybe] = params;
 
-    const quote = await this.quote({
-      userOperation,
-      sender: isObject(userOperation) ? userOperation.sender : undefined,
-      entryPoint,
-      chain: chainMaybe,
-      token: "USDC",
-    });
+    let permit: PermitData = EMPTY_PERMIT;
+    if (
+      method === "pm_getPaymasterData" &&
+      isObject(contextMaybe) &&
+      isObject(contextMaybe.permit)
+    ) {
+      const permitCtx = contextMaybe.permit;
+      permit = {
+        value: parseDecimalBigInt(permitCtx.value, "context.permit.value"),
+        deadline: parseDecimalBigInt(permitCtx.deadline, "context.permit.deadline"),
+        signature: parseBytes(permitCtx.signature, "context.permit.signature"),
+      };
+    }
+
+    const quote = await this.quote(
+      {
+        userOperation,
+        sender: isObject(userOperation) ? userOperation.sender : undefined,
+        entryPoint,
+        chain: chainMaybe,
+        token: "USDC",
+      },
+      permit,
+    );
 
     return {
       paymaster: quote.paymaster,

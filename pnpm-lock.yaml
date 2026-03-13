@@ -72,9 +72,6 @@ importers:
       '@agent-paymaster/bundler':
         specifier: workspace:*
         version: link:../bundler
-      '@agent-paymaster/sdk':
-        specifier: workspace:*
-        version: link:../sdk
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -102,12 +99,6 @@ importers:
         version: 7.6.13
 
   packages/paymaster-contracts: {}
-
-  packages/sdk:
-    devDependencies:
-      viem:
-        specifier: ^2.37.0
-        version: 2.47.1(typescript@5.9.3)
 
   packages/shared: {}
 
