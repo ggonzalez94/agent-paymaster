@@ -10,25 +10,19 @@ Format:
 
 ## [Unreleased]
 
-### Added
-
-- None yet.
+## [v0.2.1] - 2026-03-15
 
 ### Changed
 
-- None yet.
-
-### Fixed
-
-- None yet.
+- Landing page now uses Taiko brand identity (pink accent, Taiko gray palette).
+- Integration section reframed as agent-first: main CTA is "give your agent this endpoint" rather than manual code integration.
+- All CTAs updated from "Start building" to "Use with your agent".
+- Pricing simplified to single pay-per-use card.
 
 ### Docs
 
-- None yet.
-
-### Security
-
-- None yet.
+- README rewritten: expanded intro, added agent integration guide with production RPC URL, simplified four-phase "how it works", moved releases under Development section.
+- Added links bar (landing page, API status, OpenAPI spec) to README.
 
 ## [v0.2.0] - 2026-03-13
 
