@@ -61,7 +61,7 @@ describe("CompositePriceProvider", () => {
     await expect(provider.getUsdcPerEthMicros("taikoMainnet")).resolves.toBe(3_000_000_000n);
   });
 
-  it("fails closed when fewer than two fresh sources are available", async () => {
+  it("degrades to primary-only when fallback sources are unavailable", async () => {
     const provider = new CompositePriceProvider({
       primary: makeSource("chainlink", 3_000_000_000n, { count: 0 }),
       fallbacks: [
@@ -75,9 +75,7 @@ describe("CompositePriceProvider", () => {
       nowMs: () => Date.UTC(2026, 2, 12),
     });
 
-    await expect(provider.getUsdcPerEthMicros("taikoMainnet")).rejects.toThrow(
-      "Oracle quorum unavailable",
-    );
+    await expect(provider.getUsdcPerEthMicros("taikoMainnet")).resolves.toBe(3_000_000_000n);
   });
 
   it("fails closed when Chainlink deviates too far from the market median", async () => {

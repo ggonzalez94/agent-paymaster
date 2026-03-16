@@ -77,6 +77,7 @@ function createTestStack(options?: {
   const app = createApp({
     bundlerClient,
     rateLimiter: options?.rateLimiter,
+    entryPointMonitor: null,
     config: {
       paymaster: {
         priceProvider: new StaticPriceProvider(options?.usdcPerEthMicros ?? USDC_PER_ETH_MICROS),

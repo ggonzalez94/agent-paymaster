@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BundlerClient } from "./bundler-client.js";
+import { EntryPointMonitor } from "./entrypoint-monitor.js";
 import { createApp, validateConfig } from "./index.js";
 import { StaticPriceProvider } from "./paymaster-service.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
@@ -97,6 +98,7 @@ const createTestApp = (
   createApp({
     bundlerClient,
     rateLimiter: options.rateLimiter,
+    entryPointMonitor: null,
     config: {
       paymaster: {
         priceProvider: new StaticPriceProvider(3_000_000_000n),
@@ -424,6 +426,97 @@ describe("api gateway", () => {
     const payload = await response.json();
     expect(payload.result.isStub).toBe(true);
     expect(payload.result.paymasterData).toBeDefined();
+  });
+
+  it("health includes entrypoint deposit when monitor is provided", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const balanceHex = "0x" + 10_000_000_000_000_000n.toString(16).padStart(64, "0");
+    const monitor = new EntryPointMonitor({
+      paymasterAddress: TEST_PAYMASTER_ADDRESS,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ jsonrpc: "2.0", id: "ep-deposit", result: balanceHex }), {
+          status: 200,
+        })) as unknown as typeof fetch,
+    });
+
+    const app = createApp({
+      bundlerClient,
+      entryPointMonitor: monitor,
+      config: {
+        paymaster: {
+          priceProvider: new StaticPriceProvider(3_000_000_000n),
+          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+          paymasterAddress: TEST_PAYMASTER_ADDRESS,
+          tokenAddresses: { taikoMainnet: TEST_TOKEN_ADDRESS },
+        },
+      },
+    });
+
+    const response = await app.request("/health");
+    const payload = await response.json();
+    expect(payload.status).toBe("ok");
+    expect(payload.dependencies.entryPointDeposit.status).toBe("ok");
+    expect(payload.dependencies.entryPointDeposit.balanceWei).toBe("10000000000000000");
+  });
+
+  it("health degrades when entrypoint deposit is critical", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const balanceHex = "0x" + 100_000_000_000_000n.toString(16).padStart(64, "0");
+    const monitor = new EntryPointMonitor({
+      paymasterAddress: TEST_PAYMASTER_ADDRESS,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ jsonrpc: "2.0", id: "ep-deposit", result: balanceHex }), {
+          status: 200,
+        })) as unknown as typeof fetch,
+    });
+
+    const app = createApp({
+      bundlerClient,
+      entryPointMonitor: monitor,
+      config: {
+        paymaster: {
+          priceProvider: new StaticPriceProvider(3_000_000_000n),
+          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+          paymasterAddress: TEST_PAYMASTER_ADDRESS,
+          tokenAddresses: { taikoMainnet: TEST_TOKEN_ADDRESS },
+        },
+      },
+    });
+
+    const response = await app.request("/health");
+    const payload = await response.json();
+    expect(payload.status).toBe("degraded");
+    expect(payload.dependencies.entryPointDeposit.status).toBe("critical");
+  });
+
+  it("health stays ok when entrypoint deposit is low but not critical", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const balanceHex = "0x" + 1_000_000_000_000_000n.toString(16).padStart(64, "0");
+    const monitor = new EntryPointMonitor({
+      paymasterAddress: TEST_PAYMASTER_ADDRESS,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ jsonrpc: "2.0", id: "ep-deposit", result: balanceHex }), {
+          status: 200,
+        })) as unknown as typeof fetch,
+    });
+
+    const app = createApp({
+      bundlerClient,
+      entryPointMonitor: monitor,
+      config: {
+        paymaster: {
+          priceProvider: new StaticPriceProvider(3_000_000_000n),
+          quoteSignerPrivateKey: TEST_QUOTE_SIGNER_PRIVATE_KEY,
+          paymasterAddress: TEST_PAYMASTER_ADDRESS,
+          tokenAddresses: { taikoMainnet: TEST_TOKEN_ADDRESS },
+        },
+      },
+    });
+
+    const response = await app.request("/health");
+    const payload = await response.json();
+    expect(payload.status).toBe("ok");
+    expect(payload.dependencies.entryPointDeposit.status).toBe("low");
   });
 
   it("falls back to configured paymaster gas limits via pm_getPaymasterData", async () => {

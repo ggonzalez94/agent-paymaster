@@ -1,6 +1,8 @@
 import type { ChainName } from "@agent-paymaster/shared";
 import { createPublicClient, http, parseAbi, type Address } from "viem";
 
+import { logEvent } from "./logger.js";
+
 export interface PriceProvider {
   getUsdcPerEthMicros(chain: ChainName): bigint | Promise<bigint>;
   describe(): string;
@@ -128,9 +130,12 @@ export class CompositePriceProvider implements PriceProvider {
 
     if (primaryResult !== undefined) {
       if (successful.length < 2) {
-        throw new Error(
-          `Oracle quorum unavailable: only ${successful.length} fresh source available (${primaryResult.source.name})`,
-        );
+        logEvent("warn", "oracle.quorum_degraded", {
+          availableSources: successful.length,
+          source: primaryResult.source.name,
+          detail: "Using primary oracle without cross-validation — fallback sources unavailable",
+        });
+        return primaryResult.observation.usdcPerEthMicros;
       }
 
       const marketMedian = median(successful.map((result) => result.observation.usdcPerEthMicros));

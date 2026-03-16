@@ -4,6 +4,7 @@ import { buildHealth } from "@agent-paymaster/shared";
 import { Hono } from "hono";
 
 import { type BundlerClient, HttpBundlerClient } from "./bundler-client.js";
+import { EntryPointMonitor } from "./entrypoint-monitor.js";
 import { logEvent } from "./logger.js";
 import { MetricsRegistry } from "./metrics.js";
 import { openApiDocument } from "./openapi.js";
@@ -40,6 +41,9 @@ interface ApiConfig {
   requestTimeoutMs: number;
   rateLimit: RateLimitConfig;
   paymaster: PaymasterServiceConfigInput;
+  taikoRpcUrl?: string;
+  entryPointLowThresholdWei?: bigint;
+  entryPointCriticalThresholdWei?: bigint;
 }
 
 export interface CreateAppOptions {
@@ -48,6 +52,8 @@ export interface CreateAppOptions {
   paymasterService?: PaymasterService;
   metrics?: MetricsRegistry;
   rateLimiter?: FixedWindowRateLimiter;
+  /** Pass an EntryPointMonitor instance, or `null` to explicitly disable. */
+  entryPointMonitor?: EntryPointMonitor | null;
 }
 
 const DEFAULT_BUNDLER_RPC_URL = "http://127.0.0.1:3001/rpc";
@@ -141,6 +147,11 @@ const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig 
     ),
   });
 
+  const taikoRpcUrl = environment.TAIKO_RPC_URL?.trim() || undefined;
+
+  const lowThresholdRaw = environment.ENTRYPOINT_LOW_DEPOSIT_WEI?.trim();
+  const criticalThresholdRaw = environment.ENTRYPOINT_CRITICAL_DEPOSIT_WEI?.trim();
+
   return {
     bundlerRpcUrl,
     bundlerHealthUrl: environment.BUNDLER_HEALTH_URL ?? bundlerRpcUrl.replace(/\/rpc$/u, "/health"),
@@ -159,6 +170,9 @@ const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig 
       tokenAddresses,
       priceProvider,
     },
+    taikoRpcUrl,
+    entryPointLowThresholdWei: lowThresholdRaw ? BigInt(lowThresholdRaw) : undefined,
+    entryPointCriticalThresholdWei: criticalThresholdRaw ? BigInt(criticalThresholdRaw) : undefined,
   };
 };
 
@@ -328,6 +342,19 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
       windowMs: mergedConfig.rateLimit.windowMs,
     });
 
+  const entryPointMonitor =
+    options.entryPointMonitor === null
+      ? undefined
+      : (options.entryPointMonitor ??
+        (mergedConfig.paymaster.paymasterAddress
+          ? new EntryPointMonitor({
+              taikoRpcUrl: mergedConfig.taikoRpcUrl,
+              paymasterAddress: mergedConfig.paymaster.paymasterAddress,
+              lowThresholdWei: mergedConfig.entryPointLowThresholdWei,
+              criticalThresholdWei: mergedConfig.entryPointCriticalThresholdWei,
+            })
+          : undefined));
+
   const app = new Hono();
 
   app.use("*", async (c, next) => {
@@ -370,27 +397,39 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
   });
 
   app.get("/health", async (c) => {
-    const bundlerHealth = await bundlerClient.health();
+    const [bundlerHealth, depositHealth] = await Promise.all([
+      bundlerClient.health(),
+      entryPointMonitor?.checkDeposit() ?? Promise.resolve(undefined),
+    ]);
 
-    const status = bundlerHealth.status === "ok" ? "ok" : "degraded";
+    const depositDegraded = depositHealth?.status === "critical";
+    const status = bundlerHealth.status !== "ok" || depositDegraded ? "degraded" : "ok";
 
     return c.json({
       ...buildHealth("api"),
       status,
       dependencies: {
         bundler: bundlerHealth,
+        ...(depositHealth !== undefined ? { entryPointDeposit: depositHealth } : {}),
       },
     });
   });
 
   app.get("/status", async (c) => {
-    const bundlerHealth = await bundlerClient.health();
+    const [bundlerHealth, depositHealth] = await Promise.all([
+      bundlerClient.health(),
+      entryPointMonitor?.checkDeposit() ?? Promise.resolve(undefined),
+    ]);
+
+    const depositDegraded = depositHealth?.status === "critical";
+    const status = bundlerHealth.status !== "ok" || depositDegraded ? "degraded" : "ready";
 
     return c.json({
       service: "api",
-      status: bundlerHealth.status === "ok" ? "ready" : "degraded",
+      status,
       dependencies: {
         bundler: bundlerHealth,
+        ...(depositHealth !== undefined ? { entryPointDeposit: depositHealth } : {}),
       },
       paymaster: paymasterService.getConfigSummary(),
       metrics: metrics.snapshot(),
