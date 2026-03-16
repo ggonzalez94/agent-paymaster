@@ -33,7 +33,7 @@ The agent holds USDC but no ETH. The entire gas payment happens in USDC through 
 
 **2. Quote** — The agent signs an [EIP-2612 USDC permit](https://eips.ethereum.org/EIPS/eip-2612) for the quoted amount and calls `pm_getPaymasterData` with the permit attached. The API returns EIP-712 signed paymaster fields that the agent attaches to the UserOperation.
 
-**3. Submission** — The agent signs the final UserOperation and submits it via `eth_sendUserOperation`. The bundler validates it, adds it to the mempool, and batches it into an on-chain bundle transaction. The bundler pays ETH gas upfront.
+**3. Submission** — The agent signs the final UserOperation and submits it via `eth_sendUserOperation`. The bundler validates it, stores it in the mempool, and a background submitter loop simulates and forwards it to `handleOps` on-chain. The bundler pays ETH gas upfront.
 
 **4. On-chain settlement** — The EntryPoint calls the paymaster contract, which verifies the quote signature, executes the USDC permit, and locks `maxTokenCost` USDC from the agent. After the agent's transaction executes, the contract settles the actual gas cost in USDC and refunds any surplus back to the agent.
 
@@ -41,13 +41,13 @@ The agent holds USDC but no ETH. The entire gas payment happens in USDC through 
 
 ## Packages
 
-| Package                                | Description                                                   |
-| -------------------------------------- | ------------------------------------------------------------- |
-| `@agent-paymaster/api`                 | Hono API — quotes, RPC gateway, rate limiting                 |
-| `@agent-paymaster/bundler`             | ERC-4337 bundler — gas estimation, mempool, bundle submission |
-| `@agent-paymaster/shared`              | Shared types and EIP-712 helpers                              |
-| `@agent-paymaster/paymaster-contracts` | TaikoUsdcPaymaster (Solidity / Foundry)                       |
-| `@agent-paymaster/web`                 | Next.js landing page                                          |
+| Package                                | Description                                                      |
+| -------------------------------------- | ---------------------------------------------------------------- |
+| `@agent-paymaster/api`                 | Hono API — quotes, RPC gateway, rate limiting                    |
+| `@agent-paymaster/bundler`             | ERC-4337 bundler — gas estimation, mempool, automatic submission |
+| `@agent-paymaster/shared`              | Shared types and EIP-712 helpers                                 |
+| `@agent-paymaster/paymaster-contracts` | TaikoUsdcPaymaster (Solidity / Foundry)                          |
+| `@agent-paymaster/web`                 | Next.js landing page                                             |
 
 ## Quick start
 
@@ -62,6 +62,16 @@ Run services locally:
 ```bash
 pnpm dev
 ```
+
+For write-capable bundler behavior, set `BUNDLER_SUBMITTER_PRIVATE_KEY`. If it is unset, the bundler starts in read-only mode and rejects `eth_sendUserOperation` instead of silently queueing UserOps it cannot submit.
+
+Optional submission tuning:
+
+- `BUNDLER_CHAIN_RPC_URL` overrides the Taiko RPC used for `handleOps` submission.
+- `BUNDLER_MAX_OPERATIONS_PER_BUNDLE` defaults to `1` for conservative single-op bundles.
+- `BUNDLER_MAX_INFLIGHT_TRANSACTIONS` defaults to `1` to keep nonce management simple and predictable.
+- `BUNDLER_BUNDLE_POLL_INTERVAL_MS` defaults to `5000`.
+- `BUNDLER_TX_TIMEOUT_MS` defaults to `180000`.
 
 ## API
 
@@ -78,7 +88,7 @@ POST /rpc
 | `eth_sendUserOperation`    | Submit UserOp (proxied to bundler)             |
 | `eth_supportedEntryPoints` | List supported EntryPoints                     |
 
-Other routes: `GET /health`, `GET /status`, `GET /metrics`, `GET /openapi.json`.
+Other routes: `GET /health`, `GET /status`, `GET /metrics`, `GET /openapi.json`. Bundler `/health` now includes submitter status and open-operation counts.
 
 Static OpenAPI spec: [`docs/api-openapi.yaml`](docs/api-openapi.yaml).
 

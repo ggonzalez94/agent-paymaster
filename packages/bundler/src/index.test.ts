@@ -35,16 +35,19 @@ class FakeBundlerPersistence implements BundlerPersistence {
   readonly pendingOperations = new Map<
     string,
     {
-      entryPoint: string;
+      entryPoint: HexString;
       userOperation: UserOperation;
       receivedAt: number;
+      state: "pending" | "submitting";
+      submissionTxHash: HexString | null;
+      submissionStartedAt: number | null;
     }
   >();
   readonly senderReputations = new Map<string, { failures: number; bannedUntil: number | null }>();
 
   savePendingOperation(
     hash: string,
-    entryPoint: string,
+    entryPoint: HexString,
     userOperation: UserOperation,
     receivedAt: number,
   ): void {
@@ -52,7 +55,44 @@ class FakeBundlerPersistence implements BundlerPersistence {
       entryPoint,
       userOperation,
       receivedAt,
+      state: "pending",
+      submissionTxHash: null,
+      submissionStartedAt: null,
     });
+  }
+
+  markPendingOperationSubmitting(hash: string, startedAt: number): void {
+    const existing = this.pendingOperations.get(hash);
+    if (!existing) {
+      return;
+    }
+
+    existing.state = "submitting";
+    existing.submissionStartedAt = startedAt;
+    existing.submissionTxHash = null;
+  }
+
+  recordPendingOperationsTransactionHash(hashes: string[], transactionHash: HexString): void {
+    for (const hash of hashes) {
+      const existing = this.pendingOperations.get(hash);
+      if (!existing) {
+        continue;
+      }
+
+      existing.state = "submitting";
+      existing.submissionTxHash = transactionHash;
+    }
+  }
+
+  markPendingOperationPending(hash: string): void {
+    const existing = this.pendingOperations.get(hash);
+    if (!existing) {
+      return;
+    }
+
+    existing.state = "pending";
+    existing.submissionTxHash = null;
+    existing.submissionStartedAt = null;
   }
 
   removePendingOperation(hash: string): void {
@@ -61,15 +101,21 @@ class FakeBundlerPersistence implements BundlerPersistence {
 
   loadPendingOperations(): Array<{
     hash: string;
-    entryPoint: string;
+    entryPoint: HexString;
     userOperation: UserOperation;
     receivedAt: number;
+    state: "pending" | "submitting";
+    submissionTxHash: HexString | null;
+    submissionStartedAt: number | null;
   }> {
     return [...this.pendingOperations.entries()].map(([hash, value]) => ({
       hash,
       entryPoint: value.entryPoint,
       userOperation: value.userOperation,
       receivedAt: value.receivedAt,
+      state: value.state,
+      submissionTxHash: value.submissionTxHash,
+      submissionStartedAt: value.submissionStartedAt,
     }));
   }
 
@@ -152,6 +198,50 @@ describe("BundlerService", () => {
     expect(service.getPendingUserOperationsCount()).toBe(1);
   });
 
+  it("claims pending operations for submission by entry point", () => {
+    const firstHash = service.sendUserOperation(
+      buildUserOperation({ nonce: "0x1" }),
+      ENTRY_POINT_V08,
+    );
+    service.sendUserOperation(buildUserOperation({ nonce: "0x2" }), ENTRY_POINT_V07);
+    const thirdHash = service.sendUserOperation(
+      buildUserOperation({ nonce: "0x3" }),
+      ENTRY_POINT_V08,
+    );
+
+    const claim = service.claimPendingUserOperations(10);
+
+    expect(claim).not.toBeNull();
+    expect(claim?.entryPoint).toBe(ENTRY_POINT_V08);
+    expect(claim?.userOperations.map((operation) => operation.hash)).toEqual([
+      firstHash,
+      thirdHash,
+    ]);
+    expect(service.getPendingUserOperationsCount()).toBe(1);
+    expect(service.getSubmittingUserOperationsCount()).toBe(2);
+  });
+
+  it("records submission tx hashes and can release a claimed operation", () => {
+    const hash = service.sendUserOperation(buildUserOperation(), ENTRY_POINT_V08);
+    const claim = service.claimPendingUserOperations(1);
+
+    expect(claim?.userOperations[0]?.hash).toBe(hash);
+
+    service.recordUserOperationsSubmissionTxHash(
+      [hash],
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+
+    expect(service.getSubmittingUserOperations()[0]?.submissionTxHash).toBe(
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+
+    service.releaseUserOperations([hash]);
+
+    expect(service.getPendingUserOperationsCount()).toBe(1);
+    expect(service.getSubmittingUserOperationsCount()).toBe(0);
+  });
+
   it("uses canonical ERC-4337 userOpHash and ignores signature field", () => {
     const userOperation = buildUserOperation();
     const hash = service.sendUserOperation(userOperation, ENTRY_POINT_V08);
@@ -203,6 +293,18 @@ describe("BundlerService", () => {
     expect(() =>
       service.sendUserOperation(buildUserOperation({ signature: "0x" }), ENTRY_POINT_V08),
     ).toThrow("signature must not be empty");
+  });
+
+  it("rejects user operation submissions when automatic submission is disabled", () => {
+    const readOnlyService = new BundlerService({
+      chainId: 167000,
+      entryPoints: [ENTRY_POINT_V08],
+      acceptUserOperations: false,
+    });
+
+    expect(() => readOnlyService.sendUserOperation(buildUserOperation(), ENTRY_POINT_V08)).toThrow(
+      "Automatic submission is disabled",
+    );
   });
 
   it("normalizes legacy and packed paymasterAndData to the same canonical userOp hash", () => {

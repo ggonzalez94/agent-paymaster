@@ -24,7 +24,7 @@ pnpm format:write     # auto-format
 ```
 packages/
   api/           → Hono HTTP gateway (quotes, RPC proxy, metrics)  :3000
-  bundler/       → ERC-4337 bundler (Alto fork, mempool, bundles)  :3001
+  bundler/       → ERC-4337 bundler (mempool, auto-submitter, receipts)  :3001
   shared/        → Types, EIP-712 helpers, paymaster data packing
   paymaster-contracts/ → Solidity (Foundry): TaikoUsdcPaymaster
   web/           → Next.js 15 landing page (Tailwind 4)
@@ -37,7 +37,7 @@ packages/
 1. Agent builds a partial UserOp with USDC but no ETH
 2. `pm_getPaymasterData` via `POST /rpc` → API prices gas via oracle, returns EIP-712 signed `paymasterAndData`
 3. Agent submits full UserOp via `POST /rpc` (`eth_sendUserOperation`)
-4. Bundler simulates, batches, submits `handleOps` to EntryPoint
+4. Bundler queues the UserOp, the submitter loop simulates it, then submits `handleOps` to EntryPoint
 5. Contract validates quote signature in `_validatePaymasterUserOp`
 6. UserOp executes
 7. Contract settles actual USDC cost in `_postOp`, refunds surplus
@@ -69,11 +69,24 @@ Submodules: `account-abstraction`, `openzeppelin-contracts`, `forge-std`. Clone 
 
 ## Environment
 
-Copy `.env.example` → `.env`. Three vars are required to start:
+Copy `.env.example` → `.env`. Three vars are required to start the API and quote flow:
 
 - `PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY` — signs EIP-712 quotes
 - `PAYMASTER_ADDRESS` — deployed contract address
 - `ETHEREUM_MAINNET_RPC_URL` — optional override for Chainlink oracle pricing (defaults to PublicNode public Ethereum RPC if unset)
+
+For live `eth_sendUserOperation` support, the bundler also needs:
+
+- `BUNDLER_SUBMITTER_PRIVATE_KEY` — funded Taiko EOA used to submit `handleOps`
+
+Optional bundler submission tuning:
+
+- `BUNDLER_CHAIN_RPC_URL` — Taiko RPC used for submission (defaults to `TAIKO_RPC_URL`, then `TAIKO_MAINNET_RPC_URL`, then public Taiko RPC)
+- `BUNDLER_BENEFICIARY_ADDRESS` — alternate fee recipient; defaults to the submitter address
+- `BUNDLER_BUNDLE_POLL_INTERVAL_MS` — submission loop interval
+- `BUNDLER_MAX_OPERATIONS_PER_BUNDLE` — max claimed UserOps per bundle, default `1`
+- `BUNDLER_MAX_INFLIGHT_TRANSACTIONS` — max unconfirmed submitter txs, default `1`
+- `BUNDLER_TX_TIMEOUT_MS` — how long to keep tracking an unconfirmed tx before releasing its UserOps back to pending
 
 ## Tech Stack
 
@@ -139,6 +152,7 @@ Vercel should use standard deployment protection (`prod_deployment_urls_and_all_
 - **Build order matters**: `shared` must build before `api` or `bundler`. The root `pnpm build` and `pnpm test` commands handle this, but if you run package scripts directly on a fresh clone, build dependencies first.
 - **Submodules**: contract tests fail without submodules. Use `git submodule update --init --recursive` if you didn't clone with `--recurse-submodules`.
 - **SQLite WAL**: the bundler and API share a SQLite volume. Don't delete `./data/` while services are running.
+- **Bundler read-only mode**: if `BUNDLER_SUBMITTER_PRIVATE_KEY` is unset, the bundler rejects `eth_sendUserOperation` instead of accepting UserOps it cannot submit.
 - **Quote TTL**: quotes expire (default 90s). Tests that hold quotes too long will fail on-chain.
 - **Packed format**: ERC-4337 v0.8 uses packed UserOp format. Don't confuse with v0.7 struct layout.
 - **Docker**: two separate Dockerfiles — `Dockerfile` (API) and `Dockerfile.bundler`. Both expose `/health`.
@@ -146,13 +160,17 @@ Vercel should use standard deployment protection (`prod_deployment_urls_and_all_
 
 ## Config Defaults Worth Knowing
 
-| Var                           | Default | What                           |
-| ----------------------------- | ------- | ------------------------------ |
-| `PAYMASTER_SURCHARGE_BPS`     | 500     | 5% surcharge on gas cost       |
-| `PAYMASTER_QUOTE_TTL_SECONDS` | 90      | Quote validity window          |
-| `RATE_LIMIT_MAX_REQUESTS`     | 60      | Requests per window per sender |
-| `RATE_LIMIT_WINDOW_MS`        | 60000   | Rate limit window (1 min)      |
-| `REQUEST_TIMEOUT_MS`          | 2500    | Upstream request timeout       |
+| Var                                 | Default | What                                      |
+| ----------------------------------- | ------- | ----------------------------------------- |
+| `PAYMASTER_SURCHARGE_BPS`           | 500     | 5% surcharge on gas cost                  |
+| `PAYMASTER_QUOTE_TTL_SECONDS`       | 90      | Quote validity window                     |
+| `RATE_LIMIT_MAX_REQUESTS`           | 60      | Requests per window per sender            |
+| `RATE_LIMIT_WINDOW_MS`              | 60000   | Rate limit window (1 min)                 |
+| `REQUEST_TIMEOUT_MS`                | 2500    | Upstream request timeout                  |
+| `BUNDLER_MAX_OPERATIONS_PER_BUNDLE` | 1       | Safe default bundle size                  |
+| `BUNDLER_MAX_INFLIGHT_TRANSACTIONS` | 1       | Max submitter txs awaiting confirmation   |
+| `BUNDLER_BUNDLE_POLL_INTERVAL_MS`   | 5000    | Submission loop cadence                   |
+| `BUNDLER_TX_TIMEOUT_MS`             | 180000  | Release stale unconfirmed txs after 3 min |
 
 ## Networks
 
