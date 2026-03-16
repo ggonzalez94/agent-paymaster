@@ -544,8 +544,9 @@ describe("scenario: multiple UserOps in one bundle", () => {
     expect(bundle).not.toBeNull();
     expect(bundle!.userOperationHashes).toHaveLength(2);
 
-    // Remaining should still be pending
-    expect(stack.bundlerService.getPendingUserOperationsCount()).toBe(5);
+    // Claimed operations move to the submitting lease; the rest stay pending.
+    expect(stack.bundlerService.getPendingUserOperationsCount()).toBe(3);
+    expect(stack.bundlerService.getSubmittingUserOperationsCount()).toBe(2);
   });
 
   it("returns null when no pending operations for bundling", async () => {

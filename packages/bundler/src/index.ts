@@ -2,15 +2,18 @@ import { buildHealth, normalizePaymasterAndData } from "@agent-paymaster/shared"
 import { serve } from "@hono/node-server";
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
-import { concatHex, encodeAbiParameters, keccak256, toHex } from "viem";
 
+import { buildCanonicalUserOpHash } from "./entrypoint.js";
+import { logEvent } from "./logger.js";
 import { BundlerPersistenceStore } from "./persistence.js";
+import { type BundlerSubmitterHealth, BundlerSubmitter } from "./submitter.js";
 
 export type HexString = `0x${string}`;
 export type JsonRpcId = string | number | null;
 
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PATTERN = /^0x[0-9a-fA-F]*$/;
+const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 
 const RPC_PARSE_ERROR = -32700;
 const RPC_INVALID_REQUEST = -32600;
@@ -18,7 +21,6 @@ const RPC_METHOD_NOT_FOUND = -32601;
 const RPC_INVALID_PARAMS = -32602;
 const RPC_INTERNAL_ERROR = -32603;
 const RPC_RESOURCE_UNAVAILABLE = -32001;
-const UINT128_MAX = (1n << 128n) - 1n;
 
 export interface UserOperation {
   sender: HexString;
@@ -74,7 +76,22 @@ export interface UserOperationReceipt {
 
 export interface BundlerBundle {
   bundleHash: string;
+  entryPoint: string;
   userOperationHashes: string[];
+}
+
+export interface ClaimedUserOperation {
+  hash: string;
+  userOperation: UserOperation;
+  entryPoint: HexString;
+  receivedAt: number;
+  submissionTxHash: HexString | null;
+  submissionStartedAt: number | null;
+}
+
+export interface ClaimedUserOperations {
+  entryPoint: HexString;
+  userOperations: ClaimedUserOperation[];
 }
 
 export interface JsonRpcRequest {
@@ -112,10 +129,12 @@ interface SenderReputation {
 interface StoredUserOperation {
   hash: string;
   userOperation: UserOperation;
-  entryPoint: string;
+  entryPoint: HexString;
   receivedAt: number;
-  state: "pending" | "included" | "failed";
+  state: "pending" | "submitting" | "included" | "failed";
   bundleHash: string | null;
+  submissionTxHash: HexString | null;
+  submissionStartedAt: number | null;
   transactionHash: string | null;
   blockNumber: number | null;
   reason: string | null;
@@ -133,16 +152,22 @@ interface BundlerRpcErrorData {
 export interface BundlerPersistence {
   savePendingOperation(
     hash: string,
-    entryPoint: string,
+    entryPoint: HexString,
     userOperation: UserOperation,
     receivedAt: number,
   ): void;
+  markPendingOperationSubmitting(hash: string, startedAt: number): void;
+  recordPendingOperationsTransactionHash(hashes: string[], transactionHash: HexString): void;
+  markPendingOperationPending(hash: string): void;
   removePendingOperation(hash: string): void;
   loadPendingOperations(): Array<{
     hash: string;
-    entryPoint: string;
+    entryPoint: HexString;
     userOperation: UserOperation;
     receivedAt: number;
+    state: "pending" | "submitting";
+    submissionTxHash: HexString | null;
+    submissionStartedAt: number | null;
   }>;
   saveSenderReputation(sender: string, failures: number, bannedUntil: number | null): void;
   deleteSenderReputation(sender: string): void;
@@ -157,6 +182,7 @@ export interface BundlerPersistence {
 interface BundlerConfigInput {
   chainId?: number;
   entryPoints?: string[];
+  acceptUserOperations?: boolean;
   reputationMaxFailures?: number;
   banWindowMs?: number;
   baseCallGas?: bigint;
@@ -173,6 +199,7 @@ interface BundlerConfigInput {
 interface BundlerConfig {
   chainId: number;
   entryPoints: string[];
+  acceptUserOperations: boolean;
   reputationMaxFailures: number;
   banWindowMs: number;
   baseCallGas: bigint;
@@ -252,17 +279,6 @@ const bigIntToHex = (value: bigint): HexString => {
   return `0x${value.toString(16)}`;
 };
 
-const toUint128 = (value: bigint, fieldName: string): bigint => {
-  if (value < 0n || value > UINT128_MAX) {
-    throw new BundlerRpcError(RPC_INVALID_PARAMS, `${fieldName} exceeds uint128`, {
-      reason: "field_out_of_range",
-      field: fieldName,
-    });
-  }
-
-  return value;
-};
-
 const normalizeAddress = (value: string): HexString => {
   if (!ADDRESS_PATTERN.test(value)) {
     throw new BundlerRpcError(RPC_INVALID_PARAMS, "Expected a valid address", {
@@ -325,6 +341,19 @@ const parseHexField = (value: unknown, fieldName: string, optional = false): Hex
   return normalizeHex(value);
 };
 
+const parsePositiveIntegerWithFallback = (value: string | undefined, fallback: number): number => {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+};
+
 export class BundlerService {
   readonly config: BundlerConfig;
 
@@ -341,6 +370,7 @@ export class BundlerService {
         "0x0000000071727de22e5e9d8baf0edac6f37da032",
         "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
       ],
+      acceptUserOperations: config.acceptUserOperations ?? true,
       reputationMaxFailures: config.reputationMaxFailures ?? 3,
       banWindowMs: config.banWindowMs ?? 5 * 60 * 1000,
       baseCallGas: config.baseCallGas ?? 35_000n,
@@ -370,8 +400,10 @@ export class BundlerService {
         userOperation: entry.userOperation,
         entryPoint: entry.entryPoint,
         receivedAt: entry.receivedAt,
-        state: "pending",
+        state: entry.state,
         bundleHash: null,
+        submissionTxHash: entry.submissionTxHash,
+        submissionStartedAt: entry.submissionStartedAt,
         transactionHash: null,
         blockNumber: null,
         reason: null,
@@ -392,11 +424,17 @@ export class BundlerService {
   getHealth() {
     const now = Date.now();
     let pending = 0;
+    let submitting = 0;
     let bannedSenders = 0;
 
     for (const operation of this.userOperations.values()) {
       if (operation.state === "pending") {
         pending += 1;
+        continue;
+      }
+
+      if (operation.state === "submitting") {
+        submitting += 1;
       }
     }
 
@@ -410,7 +448,9 @@ export class BundlerService {
       ...buildHealth("bundler"),
       chainId: this.config.chainId,
       entryPoints: this.config.entryPoints,
+      acceptsUserOperations: this.config.acceptUserOperations,
       pendingUserOperations: pending,
+      submittingUserOperations: submitting,
       bannedSenders,
     };
   }
@@ -424,6 +464,31 @@ export class BundlerService {
     }
 
     return pending;
+  }
+
+  getSubmittingUserOperationsCount(): number {
+    let submitting = 0;
+    for (const operation of this.userOperations.values()) {
+      if (operation.state === "submitting") {
+        submitting += 1;
+      }
+    }
+
+    return submitting;
+  }
+
+  getSubmittingUserOperations(): ClaimedUserOperation[] {
+    return [...this.userOperations.values()]
+      .filter((operation) => operation.state === "submitting")
+      .sort((left, right) => left.receivedAt - right.receivedAt)
+      .map((operation) => ({
+        hash: operation.hash,
+        userOperation: operation.userOperation,
+        entryPoint: operation.entryPoint,
+        receivedAt: operation.receivedAt,
+        submissionTxHash: operation.submissionTxHash,
+        submissionStartedAt: operation.submissionStartedAt,
+      }));
   }
 
   getSupportedEntryPoints(): string[] {
@@ -473,6 +538,16 @@ export class BundlerService {
   }
 
   sendUserOperation(userOperationInput: unknown, entryPointInput: unknown): string {
+    if (!this.config.acceptUserOperations) {
+      throw new BundlerRpcError(
+        RPC_RESOURCE_UNAVAILABLE,
+        "Automatic submission is disabled for this bundler",
+        {
+          reason: "submission_disabled",
+        },
+      );
+    }
+
     const parsed = this.parseSendUserOperationParams({
       userOperation: userOperationInput,
       entryPoint: entryPointInput,
@@ -482,7 +557,7 @@ export class BundlerService {
     this.assertEntryPointSupported(parsed.entryPoint);
 
     const userOpHash = this.buildUserOpHash(parsed.userOperation, parsed.entryPoint);
-    const matchingPendingOperation = this.findPendingOperationBySenderAndNonce(
+    const matchingPendingOperation = this.findOpenOperationBySenderAndNonce(
       parsed.userOperation.sender,
       hexToBigInt(parsed.userOperation.nonce),
     );
@@ -513,6 +588,8 @@ export class BundlerService {
       receivedAt,
       state: "pending",
       bundleHash: null,
+      submissionTxHash: null,
+      submissionStartedAt: null,
       transactionHash: null,
       blockNumber: null,
       reason: null,
@@ -560,6 +637,7 @@ export class BundlerService {
     if (
       !operation ||
       operation.state === "pending" ||
+      operation.state === "submitting" ||
       operation.transactionHash === null ||
       operation.blockNumber === null
     ) {
@@ -595,7 +673,7 @@ export class BundlerService {
     };
   }
 
-  createBundle(maxOperations = 10): BundlerBundle | null {
+  claimPendingUserOperations(maxOperations = 10): ClaimedUserOperations | null {
     if (!Number.isInteger(maxOperations) || maxOperations <= 0) {
       throw new BundlerRpcError(RPC_INVALID_PARAMS, "maxOperations must be a positive integer", {
         reason: "bundle_size_invalid",
@@ -604,25 +682,140 @@ export class BundlerService {
 
     const candidates = [...this.userOperations.values()]
       .filter((operation) => operation.state === "pending")
-      .sort((left, right) => left.receivedAt - right.receivedAt)
-      .slice(0, maxOperations);
+      .sort((left, right) => left.receivedAt - right.receivedAt);
 
     if (candidates.length === 0) {
       return null;
     }
 
-    const userOperationHashes = candidates.map((operation) => operation.hash);
+    const entryPoint = candidates[0].entryPoint;
+    const selected = candidates
+      .filter((operation) => operation.entryPoint === entryPoint)
+      .slice(0, maxOperations);
+
+    const submissionStartedAt = Date.now();
+    for (const operation of selected) {
+      operation.state = "submitting";
+      operation.bundleHash = null;
+      operation.reason = null;
+      operation.submissionTxHash = null;
+      operation.submissionStartedAt = submissionStartedAt;
+      this.persistence?.markPendingOperationSubmitting(operation.hash, submissionStartedAt);
+    }
+
+    return {
+      entryPoint,
+      userOperations: selected.map((operation) => ({
+        hash: operation.hash,
+        userOperation: operation.userOperation,
+        entryPoint: operation.entryPoint,
+        receivedAt: operation.receivedAt,
+        submissionTxHash: operation.submissionTxHash,
+        submissionStartedAt: operation.submissionStartedAt,
+      })),
+    };
+  }
+
+  releaseUserOperations(userOpHashesInput: unknown[]): void {
+    for (const input of userOpHashesInput) {
+      const userOpHash = this.parseUserOpHash(input);
+      const operation = this.userOperations.get(userOpHash);
+      if (!operation || operation.state !== "submitting") {
+        continue;
+      }
+
+      operation.state = "pending";
+      operation.bundleHash = null;
+      operation.reason = null;
+      operation.submissionTxHash = null;
+      operation.submissionStartedAt = null;
+      this.persistence?.markPendingOperationPending(userOpHash);
+    }
+  }
+
+  recordUserOperationsSubmissionTxHash(
+    userOpHashesInput: unknown[],
+    transactionHashInput: unknown,
+  ): void {
+    const transactionHash = this.parseHash(transactionHashInput, "transactionHash") as HexString;
+    const userOpHashes: string[] = [];
+
+    for (const input of userOpHashesInput) {
+      const userOpHash = this.parseUserOpHash(input);
+      const operation = this.userOperations.get(userOpHash);
+      if (!operation || operation.state !== "submitting") {
+        continue;
+      }
+
+      operation.reason = null;
+      operation.submissionTxHash = transactionHash;
+      operation.submissionStartedAt ??= Date.now();
+      userOpHashes.push(userOpHash);
+    }
+
+    if (userOpHashes.length > 0) {
+      this.persistence?.recordPendingOperationsTransactionHash(userOpHashes, transactionHash);
+    }
+  }
+
+  finalizeUserOperation(userOpHashInput: unknown, submissionInput: unknown): void {
+    const userOpHash = this.parseUserOpHash(userOpHashInput);
+    const operation = this.userOperations.get(userOpHash);
+
+    if (!operation) {
+      throw new BundlerRpcError(RPC_INVALID_PARAMS, "Unknown user operation hash", {
+        reason: "userop_not_found",
+      });
+    }
+
+    const submission = this.parseBundleSubmission(submissionInput);
+    const gasUsed = hexToBigInt(submission.gasUsed);
+    const gasCost = hexToBigInt(submission.gasCost);
+    const gasPrice = submission.effectiveGasPrice
+      ? hexToBigInt(submission.effectiveGasPrice)
+      : gasUsed === 0n
+        ? hexToBigInt(operation.userOperation.maxFeePerGas)
+        : gasCost / gasUsed;
+
+    operation.state = submission.success ? "included" : "failed";
+    operation.bundleHash = null;
+    operation.submissionTxHash = null;
+    operation.submissionStartedAt = null;
+    operation.transactionHash = submission.transactionHash;
+    operation.blockNumber = submission.blockNumber;
+    operation.reason = submission.success
+      ? null
+      : (submission.reason ?? submission.revertReason ?? "execution_reverted");
+    operation.gasUsed = gasUsed;
+    operation.gasCost = gasCost;
+    operation.effectiveGasPrice = gasPrice;
+
+    this.persistence?.removePendingOperation(userOpHash);
+  }
+
+  createBundle(maxOperations = 10): BundlerBundle | null {
+    const claim = this.claimPendingUserOperations(maxOperations);
+    if (!claim) {
+      return null;
+    }
+
+    const userOperationHashes = claim.userOperations.map((operation) => operation.hash);
     const sequence = this.bundleSequence;
     this.bundleSequence += 1;
     const bundleHash = this.buildDeterministicHash(`${sequence}:${userOperationHashes.join(":")}`);
 
-    for (const operation of candidates) {
-      operation.bundleHash = bundleHash;
+    for (const operation of claim.userOperations) {
+      const stored = this.userOperations.get(operation.hash);
+      if (!stored) {
+        continue;
+      }
+
+      stored.bundleHash = bundleHash;
     }
 
     this.bundles.set(bundleHash, userOperationHashes);
 
-    return { bundleHash, userOperationHashes };
+    return { bundleHash, entryPoint: claim.entryPoint, userOperationHashes };
   }
 
   markBundleSubmitted(bundleHashInput: unknown, submissionInput: unknown): void {
@@ -635,65 +828,11 @@ export class BundlerService {
       });
     }
 
-    if (!isObject(submissionInput)) {
-      throw new BundlerRpcError(RPC_INVALID_PARAMS, "Submission payload must be an object", {
-        reason: "submission_invalid",
-      });
-    }
-
-    const transactionHash = this.parseHash(submissionInput.transactionHash, "transactionHash");
-    if (
-      typeof submissionInput.blockNumber !== "number" ||
-      !Number.isInteger(submissionInput.blockNumber)
-    ) {
-      throw new BundlerRpcError(RPC_INVALID_PARAMS, "blockNumber must be an integer", {
-        reason: "block_number_invalid",
-      });
-    }
-
-    const submission: BundleSubmission = {
-      transactionHash,
-      blockNumber: submissionInput.blockNumber,
-      gasUsed: parseHexField(submissionInput.gasUsed, "gasUsed"),
-      gasCost: parseHexField(submissionInput.gasCost, "gasCost"),
-      effectiveGasPrice:
-        submissionInput.effectiveGasPrice === undefined
-          ? undefined
-          : parseHexField(submissionInput.effectiveGasPrice, "effectiveGasPrice"),
-      success: submissionInput.success === undefined ? true : Boolean(submissionInput.success),
-      reason: submissionInput.reason === undefined ? undefined : String(submissionInput.reason),
-      revertReason:
-        submissionInput.revertReason === undefined
-          ? undefined
-          : String(submissionInput.revertReason),
-    };
-
     for (const userOpHash of operationHashes) {
-      const operation = this.userOperations.get(userOpHash);
-      if (!operation) {
-        continue;
-      }
-
-      const gasUsed = hexToBigInt(submission.gasUsed);
-      const gasCost = hexToBigInt(submission.gasCost);
-      const gasPrice = submission.effectiveGasPrice
-        ? hexToBigInt(submission.effectiveGasPrice)
-        : gasUsed === 0n
-          ? hexToBigInt(operation.userOperation.maxFeePerGas)
-          : gasCost / gasUsed;
-
-      operation.state = submission.success ? "included" : "failed";
-      operation.transactionHash = submission.transactionHash;
-      operation.blockNumber = submission.blockNumber;
-      operation.reason = submission.success
-        ? null
-        : (submission.reason ?? submission.revertReason ?? "execution_reverted");
-      operation.gasUsed = gasUsed;
-      operation.gasCost = gasCost;
-      operation.effectiveGasPrice = gasPrice;
-
-      this.persistence?.removePendingOperation(userOpHash);
+      this.finalizeUserOperation(userOpHash, submissionInput);
     }
+
+    this.bundles.delete(bundleHash);
   }
 
   markUserOperationFailed(userOpHashInput: unknown, reason = "simulation_failed"): void {
@@ -707,7 +846,15 @@ export class BundlerService {
     }
 
     operation.state = "failed";
+    operation.bundleHash = null;
+    operation.submissionTxHash = null;
+    operation.submissionStartedAt = null;
+    operation.transactionHash = null;
+    operation.blockNumber = null;
     operation.reason = reason;
+    operation.gasUsed = null;
+    operation.gasCost = null;
+    operation.effectiveGasPrice = null;
     this.recordValidationFailure(operation.userOperation.sender);
     this.persistence?.removePendingOperation(userOpHash);
   }
@@ -998,6 +1145,41 @@ export class BundlerService {
     return normalized;
   }
 
+  private parseBundleSubmission(submissionInput: unknown): BundleSubmission {
+    if (!isObject(submissionInput)) {
+      throw new BundlerRpcError(RPC_INVALID_PARAMS, "Submission payload must be an object", {
+        reason: "submission_invalid",
+      });
+    }
+
+    const transactionHash = this.parseHash(submissionInput.transactionHash, "transactionHash");
+    if (
+      typeof submissionInput.blockNumber !== "number" ||
+      !Number.isInteger(submissionInput.blockNumber)
+    ) {
+      throw new BundlerRpcError(RPC_INVALID_PARAMS, "blockNumber must be an integer", {
+        reason: "block_number_invalid",
+      });
+    }
+
+    return {
+      transactionHash,
+      blockNumber: submissionInput.blockNumber,
+      gasUsed: parseHexField(submissionInput.gasUsed, "gasUsed"),
+      gasCost: parseHexField(submissionInput.gasCost, "gasCost"),
+      effectiveGasPrice:
+        submissionInput.effectiveGasPrice === undefined
+          ? undefined
+          : parseHexField(submissionInput.effectiveGasPrice, "effectiveGasPrice"),
+      success: submissionInput.success === undefined ? true : Boolean(submissionInput.success),
+      reason: submissionInput.reason === undefined ? undefined : String(submissionInput.reason),
+      revertReason:
+        submissionInput.revertReason === undefined
+          ? undefined
+          : String(submissionInput.revertReason),
+    };
+  }
+
   private assertEntryPointSupported(entryPoint: string): void {
     if (!this.config.entryPoints.includes(entryPoint)) {
       throw new BundlerRpcError(RPC_INVALID_PARAMS, "Unsupported entry point", {
@@ -1046,91 +1228,19 @@ export class BundlerService {
   }
 
   private buildUserOpHash(userOperation: UserOperation, entryPoint: HexString): string {
-    const callGasLimit = toUint128(
-      userOperation.callGasLimit === undefined ? 0n : hexToBigInt(userOperation.callGasLimit),
-      "callGasLimit",
-    );
-    const verificationGasLimit = toUint128(
-      userOperation.verificationGasLimit === undefined
-        ? 0n
-        : hexToBigInt(userOperation.verificationGasLimit),
-      "verificationGasLimit",
-    );
-    const maxPriorityFeePerGas = toUint128(
-      hexToBigInt(userOperation.maxPriorityFeePerGas),
-      "maxPriorityFeePerGas",
-    );
-    const maxFeePerGas = toUint128(hexToBigInt(userOperation.maxFeePerGas), "maxFeePerGas");
-
-    const accountGasLimits = concatHex([
-      toHex(verificationGasLimit, { size: 16 }),
-      toHex(callGasLimit, { size: 16 }),
-    ]);
-    const gasFees = concatHex([
-      toHex(maxPriorityFeePerGas, { size: 16 }),
-      toHex(maxFeePerGas, { size: 16 }),
-    ]);
-
-    let packedPaymasterAndDataHash = keccak256("0x");
-    if (userOperation.paymasterAndData !== undefined && userOperation.paymasterAndData !== "0x") {
-      if (
-        userOperation.paymasterVerificationGasLimit === undefined ||
-        userOperation.paymasterPostOpGasLimit === undefined
-      ) {
-        throw new BundlerRpcError(
-          RPC_INVALID_PARAMS,
-          "paymaster gas limits are required when paymasterAndData is provided",
-          {
-            reason: "paymaster_gas_missing",
-          },
-        );
-      }
-      packedPaymasterAndDataHash = keccak256(userOperation.paymasterAndData);
-    }
-
-    const packedUserOp = encodeAbiParameters(
-      [
-        { type: "address" },
-        { type: "uint256" },
-        { type: "bytes32" },
-        { type: "bytes32" },
-        { type: "bytes32" },
-        { type: "uint256" },
-        { type: "bytes32" },
-        { type: "bytes32" },
-      ],
-      [
-        userOperation.sender,
-        hexToBigInt(userOperation.nonce),
-        keccak256(userOperation.initCode),
-        keccak256(userOperation.callData),
-        accountGasLimits,
-        userOperation.preVerificationGas === undefined
-          ? 0n
-          : hexToBigInt(userOperation.preVerificationGas),
-        gasFees,
-        packedPaymasterAndDataHash,
-      ],
-    );
-
-    return keccak256(
-      encodeAbiParameters(
-        [{ type: "bytes32" }, { type: "address" }, { type: "uint256" }],
-        [keccak256(packedUserOp), entryPoint, BigInt(this.config.chainId)],
-      ),
-    );
+    return buildCanonicalUserOpHash(userOperation, entryPoint, this.config.chainId);
   }
 
   private buildDeterministicHash(input: string): string {
     return `0x${createHash("sha256").update(input).digest("hex")}`;
   }
 
-  private findPendingOperationBySenderAndNonce(
+  private findOpenOperationBySenderAndNonce(
     sender: string,
     nonce: bigint,
   ): StoredUserOperation | null {
     for (const operation of this.userOperations.values()) {
-      if (operation.state !== "pending") {
+      if (operation.state !== "pending" && operation.state !== "submitting") {
         continue;
       }
 
@@ -1147,10 +1257,32 @@ export class BundlerService {
   }
 }
 
-export const createBundlerApp = (service = new BundlerService()): Hono => {
+export interface BundlerHealthMonitor {
+  getHealth(): BundlerSubmitterHealth;
+}
+
+export interface CreateBundlerAppOptions {
+  submitter?: BundlerHealthMonitor | null;
+}
+
+export const createBundlerApp = (
+  service = new BundlerService(),
+  options: CreateBundlerAppOptions = {},
+): Hono => {
   const app = new Hono();
 
-  app.get("/health", (c) => c.json(service.getHealth()));
+  app.get("/health", (c) => {
+    const serviceHealth = service.getHealth();
+    const submitterHealth = options.submitter?.getHealth();
+    const status =
+      submitterHealth && submitterHealth.status !== "ok" ? "degraded" : serviceHealth.status;
+
+    return c.json({
+      ...serviceHealth,
+      status,
+      ...(submitterHealth ? { submitter: submitterHealth } : {}),
+    });
+  });
 
   app.post("/rpc", async (c) => {
     let payload: unknown;
@@ -1170,9 +1302,67 @@ export const createBundlerApp = (service = new BundlerService()): Hono => {
 
 if (process.env.NODE_ENV !== "test") {
   const persistence = new BundlerPersistenceStore();
-  const service = new BundlerService({}, persistence);
-  const app = createBundlerApp(service);
+  const submitterPrivateKey = process.env.BUNDLER_SUBMITTER_PRIVATE_KEY?.trim();
+  const beneficiaryAddress = process.env.BUNDLER_BENEFICIARY_ADDRESS?.trim();
+  if (submitterPrivateKey !== undefined && !PRIVATE_KEY_PATTERN.test(submitterPrivateKey)) {
+    throw new Error("BUNDLER_SUBMITTER_PRIVATE_KEY must be a 32-byte hex private key");
+  }
+  if (beneficiaryAddress !== undefined && !ADDRESS_PATTERN.test(beneficiaryAddress)) {
+    throw new Error("BUNDLER_BENEFICIARY_ADDRESS must be a 20-byte hex address");
+  }
+
+  const submissionEnabled = submitterPrivateKey !== undefined;
+  const service = new BundlerService(
+    {
+      acceptUserOperations: submissionEnabled,
+    },
+    persistence,
+  );
+
+  const submitterMonitor: BundlerHealthMonitor = submissionEnabled
+    ? new BundlerSubmitter(service, {
+        privateKey: submitterPrivateKey as HexString,
+        chainRpcUrl:
+          process.env.BUNDLER_CHAIN_RPC_URL?.trim() ||
+          process.env.TAIKO_RPC_URL?.trim() ||
+          process.env.TAIKO_MAINNET_RPC_URL?.trim() ||
+          "https://rpc.mainnet.taiko.xyz",
+        pollIntervalMs: parsePositiveIntegerWithFallback(
+          process.env.BUNDLER_BUNDLE_POLL_INTERVAL_MS,
+          5_000,
+        ),
+        maxOperationsPerBundle: parsePositiveIntegerWithFallback(
+          process.env.BUNDLER_MAX_OPERATIONS_PER_BUNDLE,
+          1,
+        ),
+        maxInflightTransactions: parsePositiveIntegerWithFallback(
+          process.env.BUNDLER_MAX_INFLIGHT_TRANSACTIONS,
+          1,
+        ),
+        txTimeoutMs: parsePositiveIntegerWithFallback(process.env.BUNDLER_TX_TIMEOUT_MS, 180_000),
+        beneficiaryAddress: beneficiaryAddress as HexString | undefined,
+      })
+    : {
+        getHealth: () => ({
+          enabled: false,
+          status: "degraded",
+          lastError:
+            "BUNDLER_SUBMITTER_PRIVATE_KEY is not configured; eth_sendUserOperation is disabled",
+        }),
+      };
+
+  const app = createBundlerApp(service, {
+    submitter: submitterMonitor,
+  });
   const port = Number.parseInt(process.env.BUNDLER_PORT ?? "3001", 10);
+
+  if (submitterMonitor instanceof BundlerSubmitter) {
+    submitterMonitor.start();
+  } else {
+    logEvent("warn", "bundler.submitter_disabled", {
+      reason: "BUNDLER_SUBMITTER_PRIVATE_KEY is not configured",
+    });
+  }
 
   serve({
     fetch: app.fetch,

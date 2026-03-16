@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 
 import Database from "better-sqlite3";
 
-import type { UserOperation } from "./index.js";
+import type { HexString, UserOperation } from "./index.js";
 
 const DEFAULT_DB_PATH = "./data/servo.db";
 
@@ -22,7 +22,10 @@ export class BundlerPersistenceStore {
         hash TEXT PRIMARY KEY,
         entry_point TEXT NOT NULL,
         user_operation TEXT NOT NULL,
-        received_at INTEGER NOT NULL
+        received_at INTEGER NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending',
+        submission_tx_hash TEXT,
+        submission_started_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS sender_reputations (
@@ -32,20 +35,75 @@ export class BundlerPersistenceStore {
       );
     `);
 
+    this.migratePendingUserOperationsTable();
     this.deleteExpiredSenderReputations();
+  }
+
+  private migratePendingUserOperationsTable(): void {
+    const columns = this.db.prepare("PRAGMA table_info(pending_user_operations)").all() as Array<{
+      name: string;
+    }>;
+    const columnNames = new Set(columns.map((column) => column.name));
+
+    if (!columnNames.has("state")) {
+      this.db.exec(
+        "ALTER TABLE pending_user_operations ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'",
+      );
+    }
+
+    if (!columnNames.has("submission_tx_hash")) {
+      this.db.exec("ALTER TABLE pending_user_operations ADD COLUMN submission_tx_hash TEXT");
+    }
+
+    if (!columnNames.has("submission_started_at")) {
+      this.db.exec("ALTER TABLE pending_user_operations ADD COLUMN submission_started_at INTEGER");
+    }
   }
 
   savePendingOperation(
     hash: string,
-    entryPoint: string,
+    entryPoint: HexString,
     userOperation: UserOperation,
     receivedAt: number,
   ): void {
     this.db
       .prepare(
-        "INSERT OR REPLACE INTO pending_user_operations (hash, entry_point, user_operation, received_at) VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO pending_user_operations (hash, entry_point, user_operation, received_at, state, submission_tx_hash, submission_started_at) VALUES (?, ?, ?, ?, 'pending', NULL, NULL)",
       )
       .run(hash, entryPoint, JSON.stringify(userOperation), receivedAt);
+  }
+
+  markPendingOperationSubmitting(hash: string, startedAt: number): void {
+    this.db
+      .prepare(
+        "UPDATE pending_user_operations SET state = 'submitting', submission_started_at = ?, submission_tx_hash = NULL WHERE hash = ?",
+      )
+      .run(startedAt, hash);
+  }
+
+  recordPendingOperationsTransactionHash(hashes: string[], transactionHash: HexString): void {
+    if (hashes.length === 0) {
+      return;
+    }
+
+    const update = this.db.prepare(
+      "UPDATE pending_user_operations SET state = 'submitting', submission_tx_hash = ? WHERE hash = ?",
+    );
+    const writeBatch = this.db.transaction((pendingHashes: string[], hashValue: HexString) => {
+      for (const hash of pendingHashes) {
+        update.run(hashValue, hash);
+      }
+    });
+
+    writeBatch(hashes, transactionHash);
+  }
+
+  markPendingOperationPending(hash: string): void {
+    this.db
+      .prepare(
+        "UPDATE pending_user_operations SET state = 'pending', submission_tx_hash = NULL, submission_started_at = NULL WHERE hash = ?",
+      )
+      .run(hash);
   }
 
   removePendingOperation(hash: string): void {
@@ -54,24 +112,35 @@ export class BundlerPersistenceStore {
 
   loadPendingOperations(): Array<{
     hash: string;
-    entryPoint: string;
+    entryPoint: HexString;
     userOperation: UserOperation;
     receivedAt: number;
+    state: "pending" | "submitting";
+    submissionTxHash: HexString | null;
+    submissionStartedAt: number | null;
   }> {
     const rows = this.db
-      .prepare("SELECT hash, entry_point, user_operation, received_at FROM pending_user_operations")
+      .prepare(
+        "SELECT hash, entry_point, user_operation, received_at, state, submission_tx_hash, submission_started_at FROM pending_user_operations",
+      )
       .all() as Array<{
       hash: string;
       entry_point: string;
       user_operation: string;
       received_at: number;
+      state: string;
+      submission_tx_hash: string | null;
+      submission_started_at: number | null;
     }>;
 
     return rows.map((row) => ({
       hash: row.hash,
-      entryPoint: row.entry_point,
+      entryPoint: row.entry_point as HexString,
       userOperation: JSON.parse(row.user_operation) as UserOperation,
       receivedAt: row.received_at,
+      state: row.state === "submitting" ? "submitting" : "pending",
+      submissionTxHash: row.submission_tx_hash as HexString | null,
+      submissionStartedAt: row.submission_started_at,
     }));
   }
 
