@@ -152,7 +152,7 @@ const OPERATIONAL_DEFAULTS = {
   quoteTtlSeconds: 90,
   surchargeBps: 500,
   defaultPaymasterVerificationGasLimit: 150_000n,
-  defaultPaymasterPostOpGasLimit: 45_000n,
+  defaultPaymasterPostOpGasLimit: 80_000n,
 } as const;
 
 const normalizeAddress = (value: unknown, fieldName: string): string => {

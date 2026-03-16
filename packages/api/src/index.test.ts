@@ -38,7 +38,7 @@ class FakeBundlerClient implements BundlerClient {
           verificationGasLimit: "0x1d4c8",
           preVerificationGas: "0x5274",
           paymasterVerificationGasLimit: "0xea60",
-          paymasterPostOpGasLimit: "0xafc8",
+          paymasterPostOpGasLimit: "0x13880",
         },
       };
     }
@@ -540,6 +540,6 @@ describe("api gateway", () => {
 
     const payload = await response.json();
     expect(payload.result.paymasterVerificationGasLimit).toBe("0x249f0");
-    expect(payload.result.paymasterPostOpGasLimit).toBe("0xafc8");
+    expect(payload.result.paymasterPostOpGasLimit).toBe("0x13880");
   });
 });

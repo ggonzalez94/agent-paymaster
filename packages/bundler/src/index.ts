@@ -381,7 +381,7 @@ export class BundlerService {
       perBytePreVerificationGas: config.perBytePreVerificationGas ?? 4n,
       l1DataGasScalar: config.l1DataGasScalar ?? 1n,
       paymasterVerificationGasLimit: config.paymasterVerificationGasLimit ?? 60_000n,
-      paymasterPostOpGasLimit: config.paymasterPostOpGasLimit ?? 45_000n,
+      paymasterPostOpGasLimit: config.paymasterPostOpGasLimit ?? 80_000n,
     };
 
     this.persistence = persistence;
