@@ -10,6 +10,18 @@ Format:
 
 ## [Unreleased]
 
+## [v0.2.2] - 2026-03-16
+
+### Added
+
+- Resilient auto-submitter for the bundler: claims pending UserOps, simulates, and submits `handleOps` bundles with configurable concurrency and timeout tracking.
+- EntryPoint deposit monitoring and oracle quorum validation in the API health checks.
+- End-to-end test script (`scripts/e2e-test.ts`) for full paymaster flow testing.
+
+### Fixed
+
+- Bundler review follow-ups: improved error handling, logging, and edge-case resilience in the submission loop.
+
 ## [v0.2.1] - 2026-03-15
 
 ### Changed
