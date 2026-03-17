@@ -118,13 +118,19 @@ export class ViemSubmissionClient implements SubmissionClient {
     operations: ReturnType<typeof packUserOperation>[],
     beneficiary: HexString,
   ): Promise<{ request: unknown }> {
+    const baseFee = await this.publicClient.getBlock().then((b) => b.baseFeePerGas ?? 10_000_000n);
+    const maxPriorityFeePerGas = 1_000_000n;
+    const maxFeePerGas = baseFee * 2n + maxPriorityFeePerGas;
+
     return this.publicClient.simulateContract({
       account: this.account,
       address: entryPoint,
       abi: ENTRY_POINT_ABI,
       functionName: "handleOps",
       args: [operations, beneficiary],
-      gas: 2_000_000n,
+      gas: 500_000n,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
     });
   }
 
