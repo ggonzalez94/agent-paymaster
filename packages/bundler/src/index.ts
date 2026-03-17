@@ -635,7 +635,7 @@ export class BundlerService {
       perByteVerificationGas: config.perByteVerificationGas ?? 4n,
       perBytePreVerificationGas: config.perBytePreVerificationGas ?? 4n,
       l1DataGasScalar: config.l1DataGasScalar ?? 1n,
-      paymasterVerificationGasLimit: config.paymasterVerificationGasLimit ?? 120_000n,
+      paymasterVerificationGasLimit: config.paymasterVerificationGasLimit ?? 200_000n,
       paymasterPostOpGasLimit: config.paymasterPostOpGasLimit ?? 80_000n,
       maxFinalizedOperations: config.maxFinalizedOperations ?? 10_000,
     };

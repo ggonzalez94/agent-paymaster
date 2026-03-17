@@ -440,7 +440,7 @@ describe("BundlerService", () => {
     expect(estimate.callGasLimit).toBe("0xd6f8");
     expect(estimate.verificationGasLimit).toBe("0x1d4c8");
     expect(estimate.preVerificationGas).toBe("0x5274");
-    expect(estimate.paymasterVerificationGasLimit).toBe("0x1d4c0");
+    expect(estimate.paymasterVerificationGasLimit).toBe("0x30d40");
     expect(estimate.paymasterPostOpGasLimit).toBe("0x13880");
   });
 
