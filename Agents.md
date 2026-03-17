@@ -35,9 +35,9 @@ packages/
 ## Architecture (How It Works)
 
 1. Agent builds a partial UserOp with USDC but no ETH
-2. `pm_getPaymasterData` via `POST /rpc` → API prices gas via oracle, returns EIP-712 signed `paymasterAndData`
+2. `pm_getPaymasterData` via `POST /rpc` → API asks bundler for simulation-backed gas limits (heuristic + EntryPoint `simulateValidation` pre-op gas), prices via oracle, returns EIP-712 signed `paymasterAndData`
 3. Agent submits full UserOp via `POST /rpc` (`eth_sendUserOperation`)
-4. Bundler queues the UserOp, the submitter loop simulates it, then submits `handleOps` to EntryPoint
+4. Bundler queues the UserOp, the submitter loop simulates it, then submits `handleOps` to EntryPoint (and logs estimate-vs-actual drift when finalized)
 5. Contract validates quote signature in `_validatePaymasterUserOp`
 6. UserOp executes
 7. Contract settles actual USDC cost in `_postOp`, refunds surplus
@@ -84,7 +84,7 @@ For live `eth_sendUserOperation` support, the bundler also needs:
 
 Optional bundler submission tuning:
 
-- `BUNDLER_CHAIN_RPC_URL` — Taiko RPC used for submission (defaults to `TAIKO_RPC_URL`, then `TAIKO_MAINNET_RPC_URL`, then public Taiko RPC)
+- `BUNDLER_CHAIN_RPC_URL` — Taiko RPC used for EntryPoint `simulateValidation` gas estimation and `handleOps` submission (defaults to `TAIKO_RPC_URL`, then `TAIKO_MAINNET_RPC_URL`, then public Taiko RPC)
 - `BUNDLER_BENEFICIARY_ADDRESS` — alternate fee recipient; defaults to the submitter address
 - `BUNDLER_BUNDLE_POLL_INTERVAL_MS` — submission loop interval
 - `BUNDLER_MAX_OPERATIONS_PER_BUNDLE` — max claimed UserOps per bundle, default `1`

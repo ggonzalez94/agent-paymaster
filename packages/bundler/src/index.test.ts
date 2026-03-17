@@ -6,6 +6,7 @@ import {
   BundlerService,
   createBundlerApp,
   type BundlerPersistence,
+  type GasSimulator,
   type UserOperation,
 } from "./index.js";
 
@@ -24,12 +25,33 @@ const buildUserOperation = (overrides: Partial<UserOperation> = {}): UserOperati
 });
 
 const isErrorResponse = (
-  response: ReturnType<BundlerService["handleJsonRpc"]>,
+  response: Awaited<ReturnType<BundlerService["handleJsonRpc"]>>,
 ): response is {
   jsonrpc: "2.0";
   id: string | number | null;
   error: { code: number; message: string };
 } => "error" in response;
+
+class FakeGasSimulator implements GasSimulator {
+  constructor(private readonly simulatedPreOpGas: bigint) {}
+
+  estimatePreOpGas(
+    _userOperation: UserOperation,
+    _entryPoint: `0x${string}`,
+    _baseline: {
+      callGasLimit: `0x${string}`;
+      verificationGasLimit: `0x${string}`;
+      preVerificationGas: `0x${string}`;
+      paymasterVerificationGasLimit: `0x${string}`;
+      paymasterPostOpGasLimit: `0x${string}`;
+    },
+  ): Promise<bigint> {
+    void _userOperation;
+    void _entryPoint;
+    void _baseline;
+    return Promise.resolve(this.simulatedPreOpGas);
+  }
+}
 
 class FakeBundlerPersistence implements BundlerPersistence {
   readonly pendingOperations = new Map<
@@ -165,8 +187,8 @@ describe("BundlerService", () => {
     expect(health.entryPoints).toEqual([ENTRY_POINT_V08, ENTRY_POINT_V07]);
   });
 
-  it("estimates gas including taiko l1 data gas contribution", () => {
-    const estimate = service.estimateUserOperationGas(
+  it("estimates gas including taiko l1 data gas contribution", async () => {
+    const estimate = await service.estimateUserOperationGas(
       buildUserOperation({ l1DataGas: "0x64" }),
       ENTRY_POINT_V08,
     );
@@ -178,14 +200,44 @@ describe("BundlerService", () => {
     expect(estimate.paymasterPostOpGasLimit).toBe("0x13880");
   });
 
-  it("charges initCode byte cost against verification gas, not call gas", () => {
-    const estimate = service.estimateUserOperationGas(
+  it("charges initCode byte cost against verification gas, not call gas", async () => {
+    const estimate = await service.estimateUserOperationGas(
       buildUserOperation({ initCode: "0x1234" }),
       ENTRY_POINT_V08,
     );
 
     expect(estimate.callGasLimit).toBe("0xd6f8");
     expect(estimate.verificationGasLimit).toBe("0x1d4d8");
+  });
+
+  it("uses simulation preOpGas to raise verification gas for deployed accounts", async () => {
+    const serviceWithSimulation = new BundlerService({
+      chainId: 167000,
+      entryPoints: [ENTRY_POINT_V08],
+      gasSimulator: new FakeGasSimulator(300_000n),
+    });
+
+    const estimate = await serviceWithSimulation.estimateUserOperationGas(
+      buildUserOperation(),
+      ENTRY_POINT_V08,
+    );
+
+    expect(estimate.verificationGasLimit).toBe("0x441d0");
+  });
+
+  it("uses simulation preOpGas to raise verification gas for initCode accounts", async () => {
+    const serviceWithSimulation = new BundlerService({
+      chainId: 167000,
+      entryPoints: [ENTRY_POINT_V08],
+      gasSimulator: new FakeGasSimulator(450_000n),
+    });
+
+    const estimate = await serviceWithSimulation.estimateUserOperationGas(
+      buildUserOperation({ initCode: "0x12345678" }),
+      ENTRY_POINT_V08,
+    );
+
+    expect(estimate.verificationGasLimit).toBe("0x68bc0");
   });
 
   it("stores pending user operations and resolves lookups", () => {
@@ -405,14 +457,14 @@ describe("BundlerService", () => {
     expect(receipt?.receipt.status).toBe("0x0");
   });
 
-  it("bans senders after repeated invalid user operations", () => {
+  it("bans senders after repeated invalid user operations", async () => {
     const invalidUserOp = {
       sender: "0x1111111111111111111111111111111111111111",
       callData: "0x1234",
     };
 
     for (let index = 0; index < 3; index += 1) {
-      const errorResponse = service.handleJsonRpc({
+      const errorResponse = await service.handleJsonRpc({
         jsonrpc: "2.0",
         id: index,
         method: "eth_sendUserOperation",
@@ -425,7 +477,7 @@ describe("BundlerService", () => {
       }
     }
 
-    const bannedResponse = service.handleJsonRpc({
+    const bannedResponse = await service.handleJsonRpc({
       jsonrpc: "2.0",
       id: "blocked",
       method: "eth_sendUserOperation",
@@ -438,7 +490,7 @@ describe("BundlerService", () => {
     }
   });
 
-  it("reloads pending operations and sender bans from persistence", () => {
+  it("reloads pending operations and sender bans from persistence", async () => {
     const persistence = new FakeBundlerPersistence();
     const firstService = new BundlerService(
       {
@@ -459,7 +511,7 @@ describe("BundlerService", () => {
     };
 
     for (let index = 0; index < 3; index += 1) {
-      firstService.handleJsonRpc({
+      await firstService.handleJsonRpc({
         jsonrpc: "2.0",
         id: index,
         method: "eth_sendUserOperation",
@@ -491,8 +543,8 @@ describe("BundlerService", () => {
     ).toThrow("Sender is temporarily banned");
   });
 
-  it("returns json-rpc method not found for unknown methods", () => {
-    const response = service.handleJsonRpc({
+  it("returns json-rpc method not found for unknown methods", async () => {
+    const response = await service.handleJsonRpc({
       jsonrpc: "2.0",
       id: 42,
       method: "eth_notImplemented",
