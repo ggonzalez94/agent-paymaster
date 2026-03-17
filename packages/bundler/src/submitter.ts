@@ -119,7 +119,7 @@ export class ViemSubmissionClient implements SubmissionClient {
     beneficiary: HexString,
   ): Promise<{ request: unknown }> {
     return this.publicClient.simulateContract({
-      account: this.account.address,
+      account: this.account,
       address: entryPoint,
       abi: ENTRY_POINT_ABI,
       functionName: "handleOps",
