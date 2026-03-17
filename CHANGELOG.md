@@ -10,6 +10,12 @@ Format:
 
 ## [Unreleased]
 
+## [v0.2.5] - 2026-03-17
+
+### Fixed
+
+- Bundler admission simulation now passes through when `simulateValidation` revert data cannot be decoded (EntryPoint v0.7 moved this function to a separate `EntryPointSimulations` contract). Invalid UserOps are still caught during `handleOps` simulation in the submitter.
+
 ## [v0.2.4] - 2026-03-17
 
 ### Changed
@@ -148,7 +154,8 @@ Format:
 
 - Documented the release contract, required GitHub Actions variables and secrets, and the Railway plus Vercel deployment flow in `README.md` and `Agents.md`.
 
-[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/ggonzalez94/agent-paymaster/compare/v0.2.5...HEAD
+[v0.2.5]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.2.5
 [v0.2.4]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.2.4
 [v0.2.3]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.2.3
 [v0.2.0]: https://github.com/ggonzalez94/agent-paymaster/releases/tag/v0.2.0
