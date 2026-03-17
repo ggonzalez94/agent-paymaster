@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, isAddress, toHex } from "viem";
+import { createPublicClient, createWalletClient, http, isAddress, toHex, type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import {
@@ -39,6 +39,7 @@ export interface SubmissionReceipt {
 export interface BundlerSubmitterConfig {
   chainRpcUrl: string;
   privateKey: HexString;
+  chain?: Chain;
   pollIntervalMs?: number;
   maxOperationsPerBundle?: number;
   maxInflightTransactions?: number;
@@ -95,12 +96,14 @@ export class ViemSubmissionClient implements SubmissionClient {
   private readonly walletClient;
   private readonly account;
 
-  constructor(rpcUrl: string, privateKey: HexString) {
+  constructor(rpcUrl: string, privateKey: HexString, chain?: Chain) {
     this.account = privateKeyToAccount(privateKey);
     this.publicClient = createPublicClient({
+      chain,
       transport: http(rpcUrl),
     });
     this.walletClient = createWalletClient({
+      chain,
       account: this.account,
       transport: http(rpcUrl),
     });
@@ -199,7 +202,9 @@ export class BundlerSubmitter {
     private readonly service: BundlerService,
     config: BundlerSubmitterConfig,
   ) {
-    const client = config.client ?? new ViemSubmissionClient(config.chainRpcUrl, config.privateKey);
+    const client =
+      config.client ??
+      new ViemSubmissionClient(config.chainRpcUrl, config.privateKey, config.chain);
     if (config.beneficiaryAddress !== undefined && !isAddress(config.beneficiaryAddress)) {
       throw new Error("beneficiaryAddress must be a valid hex address");
     }

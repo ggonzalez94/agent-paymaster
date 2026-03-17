@@ -2,6 +2,7 @@ import { buildHealth, normalizePaymasterAndData } from "@agent-paymaster/shared"
 import { serve } from "@hono/node-server";
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
+import { taiko } from "viem/chains";
 
 import { buildCanonicalUserOpHash } from "./entrypoint.js";
 import { logEvent } from "./logger.js";
@@ -1322,6 +1323,7 @@ if (process.env.NODE_ENV !== "test") {
   const submitterMonitor: BundlerHealthMonitor = submissionEnabled
     ? new BundlerSubmitter(service, {
         privateKey: submitterPrivateKey as HexString,
+        chain: taiko,
         chainRpcUrl:
           process.env.BUNDLER_CHAIN_RPC_URL?.trim() ||
           process.env.TAIKO_RPC_URL?.trim() ||
