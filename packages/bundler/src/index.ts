@@ -150,6 +150,32 @@ interface StoredUserOperation {
   finalizedAt: number | null;
 }
 
+export interface BundlerMempoolDepth {
+  pending: number;
+  submitting: number;
+  total: number;
+}
+
+export interface BundlerMempoolAgeMs {
+  pendingOldest: number;
+  submittingOldest: number;
+}
+
+export interface BundlerMempoolAgeDistribution {
+  pending: Record<string, number>;
+  submitting: Record<string, number>;
+}
+
+export interface BundlerOperationalMetrics {
+  userOpsAcceptedTotal: number;
+  userOpsIncludedTotal: number;
+  userOpsFailedTotal: number;
+  acceptanceToInclusionSuccessRate: number;
+  averageAcceptanceToInclusionMs: number;
+  simulationFailureReasons: Record<string, number>;
+  revertReasons: Record<string, number>;
+}
+
 interface BundlerRpcErrorData {
   method?: string;
   reason?: string;
@@ -275,6 +301,35 @@ interface BundleSubmission {
   reason?: string;
   revertReason?: string;
 }
+
+const MEMPOOL_AGE_BUCKETS_MS = [30_000, 60_000, 300_000, 900_000] as const;
+
+const buildAgeBucketKeys = (): string[] => [
+  ...MEMPOOL_AGE_BUCKETS_MS.map((bucket) => `le_${bucket}ms`),
+  `gt_${MEMPOOL_AGE_BUCKETS_MS[MEMPOOL_AGE_BUCKETS_MS.length - 1]}ms`,
+];
+
+const buildAgeBucketCounts = (): Record<string, number> =>
+  Object.fromEntries(buildAgeBucketKeys().map((key) => [key, 0]));
+
+const recordAgeBucket = (buckets: Record<string, number>, ageMs: number): void => {
+  for (const bucket of MEMPOOL_AGE_BUCKETS_MS) {
+    if (ageMs <= bucket) {
+      buckets[`le_${bucket}ms`] += 1;
+      return;
+    }
+  }
+
+  buckets[`gt_${MEMPOOL_AGE_BUCKETS_MS[MEMPOOL_AGE_BUCKETS_MS.length - 1]}ms`] += 1;
+};
+
+const incrementReasonCounter = (counters: Map<string, number>, reason: string): void => {
+  const normalized = reason.trim().replaceAll(/\s+/g, "_").slice(0, 120) || "unknown";
+  counters.set(normalized, (counters.get(normalized) ?? 0) + 1);
+};
+
+const reasonCountersToRecord = (counters: Map<string, number>): Record<string, number> =>
+  Object.fromEntries([...counters.entries()].sort(([left], [right]) => left.localeCompare(right)));
 
 class BundlerRpcError extends Error {
   readonly code: number;
@@ -403,7 +458,14 @@ export class BundlerService {
   private readonly bundles = new Map<string, string[]>();
   private readonly senderReputation = new Map<string, SenderReputation>();
   private readonly persistence?: BundlerPersistence;
+  private readonly simulationFailureReasons = new Map<string, number>();
+  private readonly revertReasons = new Map<string, number>();
   private bundleSequence = 0;
+  private userOpsAcceptedTotal = 0;
+  private userOpsIncludedTotal = 0;
+  private userOpsFailedTotal = 0;
+  private inclusionLatencySampleCount = 0;
+  private inclusionLatencyTotalMs = 0;
 
   constructor(config: BundlerConfigInput = {}, persistence?: BundlerPersistence) {
     this.config = {
@@ -485,19 +547,38 @@ export class BundlerService {
 
   getHealth() {
     const now = Date.now();
-    let pending = 0;
-    let submitting = 0;
+    const mempoolDepth: BundlerMempoolDepth = {
+      pending: 0,
+      submitting: 0,
+      total: 0,
+    };
+    const mempoolAgeMs: BundlerMempoolAgeMs = {
+      pendingOldest: 0,
+      submittingOldest: 0,
+    };
+    const mempoolAgeDistribution: BundlerMempoolAgeDistribution = {
+      pending: buildAgeBucketCounts(),
+      submitting: buildAgeBucketCounts(),
+    };
     let finalized = 0;
     let bannedSenders = 0;
 
     for (const operation of this.userOperations.values()) {
+      const ageMs = Math.max(0, now - operation.receivedAt);
+
       if (operation.state === "pending") {
-        pending += 1;
+        mempoolDepth.pending += 1;
+        mempoolDepth.total += 1;
+        mempoolAgeMs.pendingOldest = Math.max(mempoolAgeMs.pendingOldest, ageMs);
+        recordAgeBucket(mempoolAgeDistribution.pending, ageMs);
         continue;
       }
 
       if (operation.state === "submitting") {
-        submitting += 1;
+        mempoolDepth.submitting += 1;
+        mempoolDepth.total += 1;
+        mempoolAgeMs.submittingOldest = Math.max(mempoolAgeMs.submittingOldest, ageMs);
+        recordAgeBucket(mempoolAgeDistribution.submitting, ageMs);
         continue;
       }
 
@@ -512,15 +593,36 @@ export class BundlerService {
       }
     }
 
+    const acceptanceToInclusionSuccessRate =
+      this.userOpsAcceptedTotal === 0 ? 0 : this.userOpsIncludedTotal / this.userOpsAcceptedTotal;
+    const averageAcceptanceToInclusionMs =
+      this.inclusionLatencySampleCount === 0
+        ? 0
+        : this.inclusionLatencyTotalMs / this.inclusionLatencySampleCount;
+
+    const operationalMetrics: BundlerOperationalMetrics = {
+      userOpsAcceptedTotal: this.userOpsAcceptedTotal,
+      userOpsIncludedTotal: this.userOpsIncludedTotal,
+      userOpsFailedTotal: this.userOpsFailedTotal,
+      acceptanceToInclusionSuccessRate: Number(acceptanceToInclusionSuccessRate.toFixed(6)),
+      averageAcceptanceToInclusionMs: Number(averageAcceptanceToInclusionMs.toFixed(3)),
+      simulationFailureReasons: reasonCountersToRecord(this.simulationFailureReasons),
+      revertReasons: reasonCountersToRecord(this.revertReasons),
+    };
+
     return {
       ...buildHealth("bundler"),
       chainId: this.config.chainId,
       entryPoints: this.config.entryPoints,
       acceptsUserOperations: this.config.acceptUserOperations,
-      pendingUserOperations: pending,
-      submittingUserOperations: submitting,
+      pendingUserOperations: mempoolDepth.pending,
+      submittingUserOperations: mempoolDepth.submitting,
       finalizedUserOperations: finalized,
       bannedSenders,
+      mempoolDepth,
+      mempoolAgeMs,
+      mempoolAgeDistribution,
+      operationalMetrics,
     };
   }
 
@@ -670,6 +772,7 @@ export class BundlerService {
       parsed.userOperation,
       receivedAt,
     );
+    this.userOpsAcceptedTotal += 1;
 
     return userOpHash;
   }
@@ -835,6 +938,7 @@ export class BundlerService {
       : gasUsed === 0n
         ? hexToBigInt(operation.userOperation.maxFeePerGas)
         : gasCost / gasUsed;
+    const finalizationLatencyMs = Math.max(0, Date.now() - operation.receivedAt);
 
     operation.state = submission.success ? "included" : "failed";
     operation.bundleHash = null;
@@ -850,6 +954,18 @@ export class BundlerService {
     operation.gasCost = gasCost;
     operation.effectiveGasPrice = gasPrice;
     operation.finalizedAt = Date.now();
+
+    if (submission.success) {
+      this.userOpsIncludedTotal += 1;
+      this.inclusionLatencySampleCount += 1;
+      this.inclusionLatencyTotalMs += finalizationLatencyMs;
+    } else {
+      this.userOpsFailedTotal += 1;
+      incrementReasonCounter(
+        this.revertReasons,
+        operation.reason ?? submission.reason ?? submission.revertReason ?? "execution_reverted",
+      );
+    }
 
     this.persistFinalizedOperation(operation);
     this.persistence?.removePendingOperation(userOpHash);
@@ -920,6 +1036,8 @@ export class BundlerService {
     operation.gasCost = null;
     operation.effectiveGasPrice = null;
     operation.finalizedAt = Date.now();
+    this.userOpsFailedTotal += 1;
+    incrementReasonCounter(this.simulationFailureReasons, reason);
     this.recordValidationFailure(operation.userOperation.sender);
     this.persistFinalizedOperation(operation);
     this.persistence?.removePendingOperation(userOpHash);
