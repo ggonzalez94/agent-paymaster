@@ -310,6 +310,7 @@ describe("BundlerService", () => {
     service.markUserOperationFailed(revertedHash, "simulation_failed");
     service.finalizeUserOperation(includedHash, {
       transactionHash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      blockHash: "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       blockNumber: 120,
       gasUsed: "0x1000",
       gasCost: "0x2000",
@@ -317,6 +318,7 @@ describe("BundlerService", () => {
     });
     service.finalizeUserOperation(pendingHash, {
       transactionHash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      blockHash: "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       blockNumber: 121,
       gasUsed: "0x900",
       gasCost: "0x1200",

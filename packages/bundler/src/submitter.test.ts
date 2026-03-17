@@ -435,6 +435,7 @@ describe("BundlerSubmitter", () => {
 
     client.receipts.set(client.nextTransactionHash, {
       transactionHash: client.nextTransactionHash,
+      blockHash: "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       blockNumber: 124n,
       status: "success",
       effectiveGasPrice: 9n,
