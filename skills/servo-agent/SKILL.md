@@ -22,14 +22,14 @@ Servo is an ERC-4337 paymaster + bundler for Taiko. Agents pay gas in USDC — n
 
 ## Addresses — Taiko Mainnet (Chain 167000)
 
-| | Address |
-|---|---|
-| **Servo RPC** | `https://api-production-cdfe.up.railway.app/rpc` |
-| **TaikoUsdcPaymaster** | `0xca675148201e29b13a848ce30c3074c8de995891` |
-| **ServoAccountFactory** | `0xCa245Ae9B786EF420Dc359430e5833b840880619` |
-| **EntryPoint v0.7** | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
-| **USDC** | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b` |
-| **Taiko RPC** | `https://rpc.mainnet.taiko.xyz` |
+|                         | Address                                          |
+| ----------------------- | ------------------------------------------------ |
+| **Servo RPC**           | `https://api-production-cdfe.up.railway.app/rpc` |
+| **TaikoUsdcPaymaster**  | `0xca675148201e29b13a848ce30c3074c8de995891`     |
+| **ServoAccountFactory** | `0xCa245Ae9B786EF420Dc359430e5833b840880619`     |
+| **EntryPoint v0.7**     | `0x0000000071727De22E5E9d8BAf0edAc6f37da032`     |
+| **USDC**                | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b`     |
+| **Taiko RPC**           | `https://rpc.mainnet.taiko.xyz`                  |
 
 **This paymaster is currently not deployed on testnets, so it will only work on Taiko mainnet**
 
@@ -37,7 +37,7 @@ Servo is an ERC-4337 paymaster + bundler for Taiko. Agents pay gas in USDC — n
 
 ## Flow A: Cold Start — No Wallet Yet
 
-The agent has a private key and USDC but no smart account. The account address is derived deterministically (CREATE2) and is usable *before* deployment — USDC can be sent there immediately. The factory deploys it on the first UserOp.
+The agent has a private key and USDC but no smart account. The account address is derived deterministically (CREATE2) and is usable _before_ deployment — USDC can be sent there immediately. The factory deploys it on the first UserOp.
 
 ### Step 1 — Derive the account address
 
@@ -111,8 +111,8 @@ const batchCallData = encodeFunctionData({
   abi: accountAbi,
   functionName: "executeBatch",
   args: [
-    ["0x<token>", "0x<dex>"],       // targets
-    [0n, 0n],                        // values
+    ["0x<token>", "0x<dex>"], // targets
+    [0n, 0n], // values
     [approveCalldata, swapCalldata], // datas
   ],
 });
@@ -130,17 +130,22 @@ const stubResponse = await fetch(SERVO_RPC, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    jsonrpc: "2.0", id: 1,
+    jsonrpc: "2.0",
+    id: 1,
     method: "pm_getPaymasterStubData",
-    params: [{
-      sender: accountAddress,
-      nonce: "0x0",
-      initCode,
-      callData,
-      maxFeePerGas: "0x2540be400",       // 10 gwei
-      maxPriorityFeePerGas: "0x3b9aca00", // 1 gwei
-      signature: "0x",
-    }, ENTRY_POINT, "taikoMainnet"],
+    params: [
+      {
+        sender: accountAddress,
+        nonce: "0x0",
+        initCode,
+        callData,
+        maxFeePerGas: "0x2540be400", // 10 gwei
+        maxPriorityFeePerGas: "0x3b9aca00", // 1 gwei
+        signature: "0x",
+      },
+      ENTRY_POINT,
+      "taikoMainnet",
+    ],
   }),
 });
 const stub = (await stubResponse.json()).result;
@@ -182,8 +187,8 @@ const permitSignature = await owner.signTypedData({
   },
   primaryType: "Permit",
   message: {
-    owner: accountAddress,           // smart account, NOT the EOA
-    spender: stub.paymaster,         // paymaster pulls USDC
+    owner: accountAddress, // smart account, NOT the EOA
+    spender: stub.paymaster, // paymaster pulls USDC
     value: BigInt(stub.maxTokenCostMicros),
     nonce: permitNonce,
     deadline: BigInt(stub.validUntil),
@@ -198,23 +203,29 @@ const finalResponse = await fetch(SERVO_RPC, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    jsonrpc: "2.0", id: 2,
+    jsonrpc: "2.0",
+    id: 2,
     method: "pm_getPaymasterData",
-    params: [{
-      sender: accountAddress,
-      nonce: "0x0",
-      initCode,
-      callData,
-      maxFeePerGas: "0x2540be400",
-      maxPriorityFeePerGas: "0x3b9aca00",
-      signature: "0x",
-    }, ENTRY_POINT, "taikoMainnet", {
-      permit: {
-        value: stub.maxTokenCostMicros,
-        deadline: String(stub.validUntil),
-        signature: permitSignature,
+    params: [
+      {
+        sender: accountAddress,
+        nonce: "0x0",
+        initCode,
+        callData,
+        maxFeePerGas: "0x2540be400",
+        maxPriorityFeePerGas: "0x3b9aca00",
+        signature: "0x",
       },
-    }],
+      ENTRY_POINT,
+      "taikoMainnet",
+      {
+        permit: {
+          value: stub.maxTokenCostMicros,
+          deadline: String(stub.validUntil),
+          signature: permitSignature,
+        },
+      },
+    ],
   }),
 });
 const quote = (await finalResponse.json()).result;
@@ -261,23 +272,25 @@ const sendResponse = await fetch(SERVO_RPC, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    jsonrpc: "2.0", id: 3,
+    jsonrpc: "2.0",
+    id: 3,
     method: "eth_sendUserOperation",
-    params: [{
-      sender: accountAddress,
-      nonce: "0x0",
-      initCode,
-      callData,
-      accountGasLimits: quote.accountGasLimits ?? packGasLimits(
-        BigInt(quote.verificationGasLimit), BigInt(quote.callGasLimit)
-      ),
-      preVerificationGas: quote.preVerificationGas,
-      gasFees: quote.gasFees ?? packGasLimits(
-        1_000_000_000n, 10_000_000_000n
-      ),
-      paymasterAndData: quote.paymasterAndData,
-      signature,
-    }, ENTRY_POINT],
+    params: [
+      {
+        sender: accountAddress,
+        nonce: "0x0",
+        initCode,
+        callData,
+        accountGasLimits:
+          quote.accountGasLimits ??
+          packGasLimits(BigInt(quote.verificationGasLimit), BigInt(quote.callGasLimit)),
+        preVerificationGas: quote.preVerificationGas,
+        gasFees: quote.gasFees ?? packGasLimits(1_000_000_000n, 10_000_000_000n),
+        paymasterAndData: quote.paymasterAndData,
+        signature,
+      },
+      ENTRY_POINT,
+    ],
   }),
 });
 const opHash = (await sendResponse.json()).result;
@@ -296,7 +309,8 @@ const checkReceipt = async (hash: string) => {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      jsonrpc: "2.0", id: 4,
+      jsonrpc: "2.0",
+      id: 4,
       method: "eth_getUserOperationReceipt",
       params: [hash],
     }),
@@ -321,16 +335,16 @@ If you already have a deployed 4337 account (ServoAccount, Safe, Kernel, etc.), 
 
 All methods go to `POST https://api-production-cdfe.up.railway.app/rpc`
 
-| Method | Purpose |
-|--------|---------|
-| `pm_getPaymasterStubData` | Estimate gas + USDC cost (no permit needed) |
-| `pm_getPaymasterData` | Get signed paymaster fields (pass permit in 4th param `context.permit`) |
-| `pm_supportedEntryPoints` | List supported entry points |
-| `pm_getCapabilities` | Supported chains, tokens, factory address |
-| `eth_sendUserOperation` | Submit signed UserOp to bundler |
-| `eth_getUserOperationReceipt` | Check if UserOp was included |
-| `eth_getUserOperationByHash` | Lookup UserOp by hash |
-| `eth_chainId` | Returns chain ID (hex) |
+| Method                        | Purpose                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `pm_getPaymasterStubData`     | Estimate gas + USDC cost (no permit needed)                             |
+| `pm_getPaymasterData`         | Get signed paymaster fields (pass permit in 4th param `context.permit`) |
+| `pm_supportedEntryPoints`     | List supported entry points                                             |
+| `pm_getCapabilities`          | Supported chains, tokens, factory address                               |
+| `eth_sendUserOperation`       | Submit signed UserOp to bundler                                         |
+| `eth_getUserOperationReceipt` | Check if UserOp was included                                            |
+| `eth_getUserOperationByHash`  | Lookup UserOp by hash                                                   |
+| `eth_chainId`                 | Returns chain ID (hex)                                                  |
 
 ### Quote response shape
 
@@ -360,7 +374,7 @@ All methods go to `POST https://api-production-cdfe.up.railway.app/rpc`
 
 **Quote TTL is 90 seconds.** Get the quote, sign the permit, sign the UserOp, and submit — all within 90s. Don't hold quotes across long reasoning chains. If your agent is slow, separate "deciding what to do" from "executing the Servo flow" — decide first, then run steps 5-8 without pauses.
 
-**Permit owner ≠ EOA.** The `owner` in the USDC permit is the **smart account** address, not the private key's EOA address. The EOA *signs* the permit, but the permit says "the smart account authorizes the paymaster to pull its USDC." This is the #1 source of integration bugs.
+**Permit owner ≠ EOA.** The `owner` in the USDC permit is the **smart account** address, not the private key's EOA address. The EOA _signs_ the permit, but the permit says "the smart account authorizes the paymaster to pull its USDC." This is the #1 source of integration bugs.
 
 **Stub → Final is two steps.** You must call `pm_getPaymasterStubData` first to learn the USDC cost, then sign a permit for that amount, then call `pm_getPaymasterData` with the permit. You can't skip the stub because you need the cost before you can sign the permit.
 
