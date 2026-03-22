@@ -280,6 +280,19 @@ const resolveChain = (chainInput: unknown, chainIdInput: unknown): ChainConfig =
       return byName;
     }
 
+    if (normalized.startsWith("0x")) {
+      const hexPart = normalized.slice(2);
+      if (hexPart.length > 0 && /^[0-9a-f]+$/.test(hexPart)) {
+        const hexId = Number.parseInt(hexPart, 16);
+        if (!Number.isNaN(hexId)) {
+          const byId = CHAIN_BY_ID.get(hexId);
+          if (byId !== undefined) {
+            return byId;
+          }
+        }
+      }
+    }
+
     const maybeId = Number.parseInt(normalized, 10);
     if (!Number.isNaN(maybeId)) {
       const byId = CHAIN_BY_ID.get(maybeId);
@@ -506,10 +519,12 @@ export class PaymasterService {
     this.quoteSigner = privateKeyToAccount(this.config.quoteSignerPrivateKey);
   }
 
+  private getSupportedChains(): ChainConfig[] {
+    return CHAIN_CONFIGS.filter((chain) => this.config.tokenAddresses[chain.name] !== undefined);
+  }
+
   getConfigSummary(): Record<string, unknown> {
-    const supportedChains = CHAIN_CONFIGS.filter(
-      (chain) => this.config.tokenAddresses[chain.name] !== undefined,
-    );
+    const supportedChains = this.getSupportedChains();
 
     return {
       paymasterAddress: this.config.paymasterAddress,
@@ -526,10 +541,13 @@ export class PaymasterService {
     return [...this.config.supportedEntryPoints];
   }
 
+  getChainId(): number {
+    const supportedChains = this.getSupportedChains();
+    return supportedChains[0]?.chainId ?? CHAIN_CONFIGS[0].chainId;
+  }
+
   getCapabilities(): PaymasterCapabilities {
-    const supportedChains = CHAIN_CONFIGS.filter(
-      (chain) => this.config.tokenAddresses[chain.name] !== undefined,
-    );
+    const supportedChains = this.getSupportedChains();
 
     return {
       supportedChains,
@@ -647,7 +665,7 @@ export class PaymasterService {
 
     if (permit !== EMPTY_PERMIT && permit.value < maxTokenCostMicros) {
       throw new Error(
-        `Permit value ${permit.value} is less than maxTokenCost ${maxTokenCostMicros}`,
+        "Permit value is less than the required maximum token cost. Use the maxTokenCostMicros from pm_getPaymasterStubData as the permit value.",
       );
     }
 

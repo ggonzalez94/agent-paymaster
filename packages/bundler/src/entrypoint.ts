@@ -61,7 +61,7 @@ const ERROR_STRING_SELECTOR = "0x08c379a0";
 const PANIC_SELECTOR = "0x4e487b71";
 const UINT128_MAX = (1n << 128n) - 1n;
 
-const hexToBigInt = (value: HexString): bigint => (value === "0x" ? 0n : BigInt(value));
+export const hexToBigInt = (value: HexString): bigint => (value === "0x" ? 0n : BigInt(value));
 
 const toUint128 = (value: bigint, fieldName: string): bigint => {
   if (value < 0n || value > UINT128_MAX) {

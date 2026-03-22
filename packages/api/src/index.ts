@@ -28,6 +28,7 @@ import {
 } from "./rate-limit.js";
 import {
   type DependencyHealth,
+  type JsonRpcFailure,
   type JsonRpcId,
   type JsonRpcResponse,
   isJsonRpcFailure,
@@ -38,9 +39,37 @@ import {
 
 const RPC_PARSE_ERROR = -32700;
 const RPC_INVALID_REQUEST = -32600;
+const RPC_INVALID_PARAMS = -32602;
 const RPC_INTERNAL_ERROR = -32603;
 const RPC_RATE_LIMITED = -32005;
 const USER_OPERATION_SUBMISSION_METHODS = new Set(["eth_sendUserOperation"]);
+
+/**
+ * Detects validation errors thrown by input parsing and quote validation.
+ *
+ * These are safe to surface to callers as -32602 (Invalid params) because
+ * they describe what the caller did wrong, not internal implementation
+ * details. Internal errors (bundler failures, price provider errors, etc.)
+ * are intentionally excluded so they stay as -32603 (Internal error).
+ */
+const isValidationError = (error: Error): boolean => {
+  const message = error.message;
+
+  return (
+    message.includes("must be a valid") ||
+    message.includes("must be a hex") ||
+    message.includes("must be a string") ||
+    message.includes("must be an object") ||
+    message.includes("is required") ||
+    message.includes("Only USDC is supported") ||
+    message.includes("Unsupported chain") ||
+    message.includes("Unsupported paymaster method") ||
+    message.includes("exceeds uint128") ||
+    message.includes("exceeds supported range") ||
+    message.includes("Permit value") ||
+    message.includes("must be a valid integer")
+  );
+};
 
 interface RateLimitConfig {
   windowMs: number;
@@ -904,7 +933,14 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
         paymasterService.validateUserOperationEntryPoint(entryPointArg, payload.method);
       }
 
-      if (payload.method.startsWith("pm_")) {
+      if (payload.method === "eth_chainId") {
+        const chainId = paymasterService.getChainId();
+        rpcResponse = {
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: `0x${chainId.toString(16)}`,
+        } as const;
+      } else if (payload.method.startsWith("pm_")) {
         const result = await paymasterService.handleRpc(payload.method, payload.params);
         rpcResponse = {
           jsonrpc: "2.0",
@@ -919,12 +955,17 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
         method: payload.method,
         error: error instanceof Error ? error.message : "rpc_handler_failure",
       });
-      const response =
-        error instanceof PaymasterRpcError
-          ? makeJsonRpcError(payload.id, error.code, error.message, error.data)
-          : makeJsonRpcError(payload.id, RPC_INTERNAL_ERROR, "Internal error", {
-              reason: "rpc_handler_failure",
-            });
+
+      let response: JsonRpcFailure;
+      if (error instanceof PaymasterRpcError) {
+        response = makeJsonRpcError(payload.id, error.code, error.message, error.data);
+      } else if (error instanceof Error && isValidationError(error)) {
+        response = makeJsonRpcError(payload.id, RPC_INVALID_PARAMS, error.message);
+      } else {
+        response = makeJsonRpcError(payload.id, RPC_INTERNAL_ERROR, "Internal error", {
+          reason: "rpc_handler_failure",
+        });
+      }
 
       metrics.recordRpc(payload.method, "error");
       const result = c.json(response, 200);

@@ -575,7 +575,8 @@ describe("api gateway", () => {
 
     const payload = await response.json();
     expect(payload.error).toBeDefined();
-    expect(payload.error.code).toBe(-32603);
+    expect(payload.error.code).toBe(-32602);
+    expect(payload.error.message).toContain("Permit value");
   });
 
   it("pm_getPaymasterData rejects malformed permit context with structured error", async () => {
@@ -754,5 +755,179 @@ describe("api gateway", () => {
     const payload = await response.json();
     expect(payload.result.paymasterVerificationGasLimit).toBe("0x249f0");
     expect(payload.result.paymasterPostOpGasLimit).toBe("0x13880");
+  });
+
+  it("resolves hex chain ID (0x28c58) in pm_getPaymasterData", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 20,
+        method: "pm_getPaymasterData",
+        params: [SAMPLE_USER_OPERATION, ENTRY_POINT_V07, "0x28c58"],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result).toBeDefined();
+    expect(payload.result.token).toBe("USDC");
+    expect(payload.result.paymasterAndData).toMatch(/^0x/);
+  });
+
+  it("resolves hex chain ID for taikoHekla (0x28c61)", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 21,
+        method: "pm_getPaymasterData",
+        params: [SAMPLE_USER_OPERATION, ENTRY_POINT_V07, "0x28c61"],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result).toBeDefined();
+    expect(payload.result.token).toBe("USDC");
+  });
+
+  it("returns validation errors with code -32602 and useful message", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    // Invalid sender address
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 30,
+        method: "pm_getPaymasterData",
+        params: [
+          { ...SAMPLE_USER_OPERATION, sender: "not-an-address" },
+          ENTRY_POINT_V07,
+          "taikoMainnet",
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.error).toBeDefined();
+    expect(payload.error.code).toBe(-32602);
+    expect(payload.error.message).toContain("must be a valid");
+  });
+
+  it("returns -32602 for missing required fields instead of -32603", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    // Missing userOperation entirely
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 31,
+        method: "pm_getPaymasterData",
+        params: ["not-an-object", ENTRY_POINT_V07, "taikoMainnet"],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.error).toBeDefined();
+    expect(payload.error.code).toBe(-32602);
+    expect(payload.error.message).toContain("is required");
+  });
+
+  it("returns -32602 for hex quantity validation errors", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 32,
+        method: "pm_getPaymasterData",
+        params: [{ ...SAMPLE_USER_OPERATION, nonce: "not-hex" }, ENTRY_POINT_V07, "taikoMainnet"],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.error).toBeDefined();
+    expect(payload.error.code).toBe(-32602);
+    expect(payload.error.message).toContain("must be a hex quantity");
+  });
+
+  it("returns eth_chainId as hex string", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 40,
+        method: "eth_chainId",
+        params: [],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result).toBe("0x28c58");
+    expect(bundlerClient.rpcCalls).toHaveLength(0);
+  });
+
+  it("eth_chainId is not forwarded to bundler", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    await app.request("/rpc", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 41,
+        method: "eth_chainId",
+        params: [],
+      }),
+    });
+
+    expect(bundlerClient.rpcCalls).toHaveLength(0);
   });
 });

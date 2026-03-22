@@ -8,7 +8,12 @@ import {
   type HexString,
   type UserOperation,
 } from "./index.js";
-import { BundlerSubmitter, type SubmissionClient, type SubmissionReceipt } from "./submitter.js";
+import {
+  BundlerSubmitter,
+  computeSimulationGasLimit,
+  type SubmissionClient,
+  type SubmissionReceipt,
+} from "./submitter.js";
 
 const ENTRY_POINT_V07 = "0x0000000071727de22e5e9d8baf0edac6f37da032";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -30,7 +35,11 @@ const buildUserOperation = (overrides: Partial<UserOperation> = {}): UserOperati
 class FakeSubmissionClient implements SubmissionClient {
   readonly receipts = new Map<HexString, SubmissionReceipt>();
   readonly pendingTransactions = new Set<HexString>();
-  readonly simulatedBatches: Array<{ entryPoint: HexString; operationCount: number }> = [];
+  readonly simulatedBatches: Array<{
+    entryPoint: HexString;
+    operationCount: number;
+    gas?: bigint;
+  }> = [];
   readonly submittedTransactions: HexString[] = [];
 
   balance = 10n ** 18n;
@@ -44,6 +53,8 @@ class FakeSubmissionClient implements SubmissionClient {
   async simulateHandleOps(
     entryPoint: HexString,
     operations: PackedUserOperation[],
+    _beneficiary: HexString,
+    gas?: bigint,
   ): Promise<{ request: unknown }> {
     if (this.simulationError) {
       throw this.simulationError;
@@ -52,6 +63,7 @@ class FakeSubmissionClient implements SubmissionClient {
     this.simulatedBatches.push({
       entryPoint,
       operationCount: operations.length,
+      gas,
     });
 
     return {
@@ -618,5 +630,143 @@ describe("BundlerSubmitter", () => {
     expect(submitter.getHealth().lastError).toContain(
       "refusing automatic requeue to avoid duplicate bundle submission",
     );
+  });
+
+  it("computes a high simulation gas limit for cold-start UserOps with initCode", async () => {
+    const client = new FakeSubmissionClient();
+    const service = new BundlerService({
+      chainId: 167000,
+      entryPoints: [ENTRY_POINT_V07],
+    });
+    const coldStartOp = buildUserOperation({
+      initCode: `0x${"aa".repeat(40)}` as HexString,
+      callGasLimit: "0xd6d8", // 55_000
+      verificationGasLimit: "0x7a120", // 500_000
+      preVerificationGas: "0x5208", // 21_000
+      paymasterVerificationGasLimit: "0x30d40", // 200_000
+      paymasterPostOpGasLimit: "0x13880", // 80_000
+    });
+    await service.sendUserOperation(coldStartOp, ENTRY_POINT_V07);
+
+    const submitter = new BundlerSubmitter(service, {
+      chainRpcUrl: "https://rpc.mainnet.taiko.xyz",
+      privateKey: `0x${"1".repeat(64)}`,
+      client,
+      pollIntervalMs: 10,
+    });
+
+    await submitter.tick();
+
+    expect(client.simulatedBatches).toHaveLength(1);
+    const simulationGas = client.simulatedBatches[0].gas;
+    expect(simulationGas).toBeDefined();
+    // Sum = 55_000 + 500_000 + 21_000 + 200_000 + 80_000 = 856_000
+    // 856_000 * 1.5 = 1_284_000
+    expect(simulationGas).toBe(1_284_000n);
+    expect(simulationGas).toBeGreaterThan(500_000n);
+  });
+
+  it("computes a moderate simulation gas limit for warm UserOps without initCode", async () => {
+    const client = new FakeSubmissionClient();
+    const service = new BundlerService({
+      chainId: 167000,
+      entryPoints: [ENTRY_POINT_V07],
+    });
+    // Note: sendUserOperation fills in default paymasterVerificationGasLimit (200_000)
+    // and paymasterPostOpGasLimit (80_000) when not explicitly provided
+    const warmOp = buildUserOperation({
+      initCode: "0x",
+      callGasLimit: "0xd6d8", // 55_000
+      verificationGasLimit: "0x186a0", // 100_000
+      preVerificationGas: "0x5208", // 21_000
+    });
+    await service.sendUserOperation(warmOp, ENTRY_POINT_V07);
+
+    const submitter = new BundlerSubmitter(service, {
+      chainRpcUrl: "https://rpc.mainnet.taiko.xyz",
+      privateKey: `0x${"1".repeat(64)}`,
+      client,
+      pollIntervalMs: 10,
+    });
+
+    await submitter.tick();
+
+    expect(client.simulatedBatches).toHaveLength(1);
+    const simulationGas = client.simulatedBatches[0].gas;
+    expect(simulationGas).toBeDefined();
+    // Sum = 55_000 + 100_000 + 21_000 + 200_000 (default) + 80_000 (default) = 456_000
+    // 456_000 * 1.5 = 684_000
+    expect(simulationGas).toBe(684_000n);
+    // Still higher than the old hardcoded 500k limit
+    expect(simulationGas).toBeGreaterThan(500_000n);
+  });
+});
+
+describe("computeSimulationGasLimit", () => {
+  it("sums all gas fields with 1.5x multiplier", () => {
+    const result = computeSimulationGasLimit([
+      buildUserOperation({
+        callGasLimit: "0x10000", // 65_536
+        verificationGasLimit: "0x10000", // 65_536
+        preVerificationGas: "0x10000", // 65_536
+        paymasterVerificationGasLimit: "0x10000", // 65_536
+        paymasterPostOpGasLimit: "0x10000", // 65_536
+      }),
+    ]);
+
+    // 65_536 * 5 = 327_680; 327_680 * 3 / 2 = 491_520
+    expect(result).toBe(491_520n);
+  });
+
+  it("returns the default 1_500_000 when all gas fields are missing", () => {
+    const result = computeSimulationGasLimit([
+      buildUserOperation({
+        callGasLimit: undefined,
+        verificationGasLimit: undefined,
+        preVerificationGas: undefined,
+      }),
+    ]);
+
+    expect(result).toBe(1_500_000n);
+  });
+
+  it("returns the default 1_500_000 for an empty operations array", () => {
+    const result = computeSimulationGasLimit([]);
+    expect(result).toBe(1_500_000n);
+  });
+
+  it("handles cold-start UserOps with high gas limits", () => {
+    const result = computeSimulationGasLimit([
+      buildUserOperation({
+        callGasLimit: "0xd6d8", // 55_000
+        verificationGasLimit: "0x7a120", // 500_000
+        preVerificationGas: "0x5208", // 21_000
+        paymasterVerificationGasLimit: "0x30d40", // 200_000
+        paymasterPostOpGasLimit: "0x13880", // 80_000
+      }),
+    ]);
+
+    // 55_000 + 500_000 + 21_000 + 200_000 + 80_000 = 856_000
+    // 856_000 * 3 / 2 = 1_284_000
+    expect(result).toBe(1_284_000n);
+    expect(result).toBeGreaterThan(750_000n);
+  });
+
+  it("aggregates gas across multiple UserOps in a bundle", () => {
+    const result = computeSimulationGasLimit([
+      buildUserOperation({
+        callGasLimit: "0x10000", // 65_536
+        verificationGasLimit: "0x10000", // 65_536
+        preVerificationGas: "0x10000", // 65_536
+      }),
+      buildUserOperation({
+        callGasLimit: "0x10000", // 65_536
+        verificationGasLimit: "0x10000", // 65_536
+        preVerificationGas: "0x10000", // 65_536
+      }),
+    ]);
+
+    // 65_536 * 3 * 2 = 393_216; 393_216 * 3 / 2 = 589_824
+    expect(result).toBe(589_824n);
   });
 });
