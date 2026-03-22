@@ -5,11 +5,12 @@ import {
   ENTRY_POINT_ABI,
   collectUserOperationExecutions,
   extractBundlerErrorReason,
+  hexToBigInt,
   packUserOperation,
 } from "./entrypoint.js";
 import { logEvent } from "./logger.js";
 
-import type { HexString } from "./index.js";
+import type { HexString, UserOperation } from "./index.js";
 import type { BundlerService, ClaimedUserOperation, ClaimedUserOperations } from "./index.js";
 
 export interface SubmissionClient {
@@ -17,6 +18,7 @@ export interface SubmissionClient {
     entryPoint: HexString,
     operations: ReturnType<typeof packUserOperation>[],
     beneficiary: HexString,
+    gas?: bigint,
   ): Promise<{ request: unknown }>;
   submitHandleOps(request: unknown): Promise<HexString>;
   getTransactionReceipt(hash: HexString): Promise<SubmissionReceipt | null>;
@@ -72,6 +74,47 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_OPERATIONS_PER_BUNDLE = 1;
 const DEFAULT_MAX_INFLIGHT_TRANSACTIONS = 1;
 const DEFAULT_TX_TIMEOUT_MS = 180_000;
+const DEFAULT_SIMULATION_GAS = 1_500_000n;
+const SIMULATION_GAS_MULTIPLIER_NUM = 3n;
+const SIMULATION_GAS_MULTIPLIER_DEN = 2n;
+
+export const computeSimulationGasLimit = (userOperations: UserOperation[]): bigint => {
+  let totalGas = 0n;
+
+  for (const userOperation of userOperations) {
+    const callGasLimit =
+      userOperation.callGasLimit !== undefined ? hexToBigInt(userOperation.callGasLimit) : 0n;
+    const verificationGasLimit =
+      userOperation.verificationGasLimit !== undefined
+        ? hexToBigInt(userOperation.verificationGasLimit)
+        : 0n;
+    const preVerificationGas =
+      userOperation.preVerificationGas !== undefined
+        ? hexToBigInt(userOperation.preVerificationGas)
+        : 0n;
+    const paymasterVerificationGasLimit =
+      userOperation.paymasterVerificationGasLimit !== undefined
+        ? hexToBigInt(userOperation.paymasterVerificationGasLimit)
+        : 0n;
+    const paymasterPostOpGasLimit =
+      userOperation.paymasterPostOpGasLimit !== undefined
+        ? hexToBigInt(userOperation.paymasterPostOpGasLimit)
+        : 0n;
+
+    totalGas +=
+      callGasLimit +
+      verificationGasLimit +
+      preVerificationGas +
+      paymasterVerificationGasLimit +
+      paymasterPostOpGasLimit;
+  }
+
+  if (totalGas === 0n) {
+    return DEFAULT_SIMULATION_GAS;
+  }
+
+  return (totalGas * SIMULATION_GAS_MULTIPLIER_NUM) / SIMULATION_GAS_MULTIPLIER_DEN;
+};
 
 const isNotFoundError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
@@ -118,6 +161,7 @@ export class ViemSubmissionClient implements SubmissionClient {
     entryPoint: HexString,
     operations: ReturnType<typeof packUserOperation>[],
     beneficiary: HexString,
+    gas?: bigint,
   ): Promise<{ request: unknown }> {
     const baseFee = await this.publicClient.getBlock().then((b) => b.baseFeePerGas ?? 10_000_000n);
     const maxPriorityFeePerGas = 1_000_000n;
@@ -129,7 +173,7 @@ export class ViemSubmissionClient implements SubmissionClient {
       abi: ENTRY_POINT_ABI,
       functionName: "handleOps",
       args: [operations, beneficiary],
-      gas: 500_000n,
+      gas: gas ?? DEFAULT_SIMULATION_GAS,
       maxFeePerGas,
       maxPriorityFeePerGas,
     });
@@ -465,12 +509,17 @@ export class BundlerSubmitter {
           };
     const userOpHashes = activeClaim.userOperations.map((operation) => operation.hash);
 
+    const simulationGas = computeSimulationGasLimit(
+      activeClaim.userOperations.map((operation) => operation.userOperation),
+    );
+
     let simulation: { request: unknown };
     try {
       simulation = await this.client.simulateHandleOps(
         activeClaim.entryPoint,
         packedOperations,
         this.beneficiaryAddress,
+        simulationGas,
       );
     } catch (error) {
       const reason = extractBundlerErrorReason(error);
