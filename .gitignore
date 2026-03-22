@@ -22,4 +22,7 @@ package-lock.json
 
 # Local notes
 .notes/
+
+# Skill eval workspaces
+skills/*-workspace/
 packages/paymaster-contracts/broadcast/

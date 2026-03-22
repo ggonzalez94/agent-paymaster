@@ -1,0 +1,119 @@
+{
+  "skill_name": "servo-agent",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I have USDC on Taiko and want to transact without ETH. Can you set up a wallet for my agent?",
+      "expected_output": "Should use standard viem/4337 tooling to interact with Servo's RPC. Derive a counterfactual address from the factory, explain funding, show the full stub→permit→final→sign→submit flow with correct Servo addresses.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "uses_standard_tooling",
+          "description": "Uses viem or another standard ERC-4337 library (not a proprietary SDK)",
+          "type": "llm_judge",
+          "criteria": "The response uses standard tooling like viem, permissionless.js, or raw fetch/HTTP calls to interact with the RPC — NOT a proprietary SDK like @agent-paymaster/sdk"
+        },
+        {
+          "name": "correct_servo_rpc",
+          "description": "Uses the correct Servo RPC URL",
+          "type": "output_contains_pattern",
+          "pattern": "api-production-cdfe.up.railway.app"
+        },
+        {
+          "name": "correct_factory",
+          "description": "Uses the correct ServoAccountFactory address",
+          "type": "output_contains_pattern",
+          "pattern": "0xCa245Ae9B786EF420Dc359430e5833b840880619"
+        },
+        {
+          "name": "explains_counterfactual",
+          "description": "Explains deterministic address derivation and USDC funding before deployment",
+          "type": "llm_judge",
+          "criteria": "The response explains that the wallet address is derived before deployment (CREATE2/counterfactual) and that USDC should be sent to this address"
+        },
+        {
+          "name": "no_eth_required",
+          "description": "Makes clear no ETH is needed",
+          "type": "llm_judge",
+          "criteria": "The response clearly states no ETH is needed — not for gas, deployment, or anything"
+        },
+        {
+          "name": "shows_two_step_quote",
+          "description": "Shows the stub→permit→final quote flow",
+          "type": "llm_judge",
+          "criteria": "The response demonstrates calling pm_getPaymasterStubData first (to learn the USDC cost), then signing a permit, then calling pm_getPaymasterData with the permit"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I want my agent to have a smart wallet on Taiko and transact with USDC only. Can you set it up? It should be able to call any contract.",
+      "expected_output": "Should show how to derive the wallet, encode arbitrary calls via execute(), batch calls via executeBatch(), and interact with Servo's paymaster RPC — all with standard tooling.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "uses_standard_tooling",
+          "description": "Uses viem or standard 4337 tooling, not a proprietary SDK",
+          "type": "llm_judge",
+          "criteria": "Uses viem, permissionless.js, or raw HTTP/fetch — NOT @agent-paymaster/sdk"
+        },
+        {
+          "name": "correct_addresses",
+          "description": "Uses correct Servo production addresses",
+          "type": "output_contains_pattern",
+          "pattern": "api-production-cdfe.up.railway.app"
+        },
+        {
+          "name": "shows_arbitrary_call",
+          "description": "Shows how to call any contract with arbitrary calldata",
+          "type": "llm_judge",
+          "criteria": "Demonstrates encoding and sending a call to an arbitrary contract, making clear the agent can interact with any contract"
+        },
+        {
+          "name": "mentions_batch",
+          "description": "Mentions or shows batch/multi-call capability",
+          "type": "llm_judge",
+          "criteria": "Mentions or demonstrates that multiple calls can be batched atomically"
+        },
+        {
+          "name": "explains_usdc_gas",
+          "description": "Explains gas is paid in USDC automatically via the paymaster",
+          "type": "llm_judge",
+          "criteria": "Explains that gas fees are paid in USDC through the paymaster, not ETH"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "How much does it cost to send a tx through Servo? My agent is kinda slow, it thinks for a few minutes before actually sending.",
+      "expected_output": "Should explain pricing (5% surcharge), warn about the 90s quote TTL, and advise the two-phase pattern.",
+      "files": [],
+      "assertions": [
+        {
+          "name": "mentions_90s_ttl",
+          "description": "Warns about the 90-second quote expiry",
+          "type": "llm_judge",
+          "criteria": "Warns that paymaster quotes expire after about 90 seconds and this is a problem for a slow agent"
+        },
+        {
+          "name": "advises_two_phase",
+          "description": "Recommends separating price check from submission",
+          "type": "llm_judge",
+          "criteria": "Advises: check the price first (take your time), then get a fresh quote and submit quickly when ready"
+        },
+        {
+          "name": "mentions_pricing",
+          "description": "Explains the 5% surcharge",
+          "type": "llm_judge",
+          "criteria": "Mentions the 5% surcharge on gas costs"
+        },
+        {
+          "name": "correct_rpc",
+          "description": "Uses correct Servo endpoint",
+          "type": "output_contains_pattern",
+          "pattern": "api-production-cdfe.up.railway.app"
+        }
+      ]
+    }
+  ]
+}
