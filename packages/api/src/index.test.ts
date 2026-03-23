@@ -642,6 +642,75 @@ describe("api gateway", () => {
     expect(payload.result.paymasterData).toBeDefined();
   });
 
+  it("pm_getPaymasterStubData succeeds with minimal UserOp (no initCode/signature)", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const minimalUserOp = {
+      sender: "0x1111111111111111111111111111111111111111",
+      nonce: "0x1",
+      callData: "0x1234",
+      maxFeePerGas: "0x100",
+      maxPriorityFeePerGas: "0x10",
+    };
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 20,
+        method: "pm_getPaymasterStubData",
+        params: [minimalUserOp, ENTRY_POINT_V07, "taikoMainnet", {}],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result.isStub).toBe(true);
+    expect(payload.result.paymasterData).toBeDefined();
+
+    // Verify the bundler received defaults for missing fields
+    const estimateCall = bundlerClient.rpcCalls.find(
+      (call) => call.method === "eth_estimateUserOperationGas",
+    );
+    expect(estimateCall).toBeDefined();
+    const sentUserOp = (estimateCall!.params as unknown[])[0] as Record<string, unknown>;
+    expect(sentUserOp.initCode).toBe("0x");
+    expect(sentUserOp.signature).toBeDefined();
+    expect(sentUserOp.signature).not.toBe("0x");
+  });
+
+  it("pm_getPaymasterStubData preserves caller-provided initCode and signature", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 21,
+        method: "pm_getPaymasterStubData",
+        params: [SAMPLE_USER_OPERATION, ENTRY_POINT_V07, "taikoMainnet", {}],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.result.isStub).toBe(true);
+
+    // Verify the bundler received the caller's original values
+    const estimateCall = bundlerClient.rpcCalls.find(
+      (call) => call.method === "eth_estimateUserOperationGas",
+    );
+    const sentUserOp = (estimateCall!.params as unknown[])[0] as Record<string, unknown>;
+    expect(sentUserOp.initCode).toBe("0x");
+    expect(sentUserOp.signature).toBe("0x99");
+  });
+
   it("health includes entrypoint deposit when monitor is provided", async () => {
     const bundlerClient = new FakeBundlerClient();
     const balanceHex = "0x" + 10_000_000_000_000_000n.toString(16).padStart(64, "0");

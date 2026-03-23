@@ -10,6 +10,13 @@ Format:
 
 ## [Unreleased]
 
+## [v0.2.7] - 2026-03-23
+
+### Fixed
+
+- `pm_getPaymasterStubData` no longer fails when the caller omits `initCode` or `signature` from the UserOp. The API now injects safe defaults before forwarding to the bundler for gas estimation, matching the ERC-4337 spec expectation that stub calls work with incomplete UserOps.
+- Internal RPC errors now include a `detail` field with the underlying error message, making production debugging easier.
+
 ## [v0.2.6] - 2026-03-22
 
 ### Added

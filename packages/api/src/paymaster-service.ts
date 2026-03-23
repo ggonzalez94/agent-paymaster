@@ -94,6 +94,14 @@ const EMPTY_PERMIT: PermitData = {
   signature: "0x",
 };
 
+/**
+ * 65-byte placeholder signature used for gas estimation when the caller has
+ * not yet produced a real signature.  The bundler requires a non-empty
+ * signature field, so we inject this dummy value for stub/estimation calls.
+ */
+const DUMMY_SIGNATURE: `0x${string}` =
+  "0xfffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c";
+
 export type ChainName = "taikoMainnet" | "taikoHekla" | "taikoHoodi";
 
 interface ChainConfig {
@@ -628,11 +636,25 @@ export class PaymasterService {
       throw new Error(`Chain ${parsed.chain.name} is not configured`);
     }
 
+    // The bundler requires initCode and a non-empty signature for gas
+    // estimation, but callers of pm_getPaymasterStubData typically send
+    // minimal UserOps before they have a real signature.  Inject safe
+    // defaults so the estimation succeeds without mutating the caller's
+    // original object.
+    const estimationUserOp = {
+      ...parsed.userOperation,
+      initCode: parsed.userOperation.initCode ?? "0x",
+      signature:
+        parsed.userOperation.signature && parsed.userOperation.signature !== "0x"
+          ? parsed.userOperation.signature
+          : DUMMY_SIGNATURE,
+    };
+
     const gasEstimateResponse = await this.bundlerClient.rpc({
       jsonrpc: "2.0",
       id: "pm-estimate",
       method: "eth_estimateUserOperationGas",
-      params: [parsed.userOperation, parsed.entryPoint],
+      params: [estimationUserOp, parsed.entryPoint],
     } satisfies JsonRpcRequest);
 
     if (isJsonRpcFailure(gasEstimateResponse)) {

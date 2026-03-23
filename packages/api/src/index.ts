@@ -964,6 +964,7 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
       } else {
         response = makeJsonRpcError(payload.id, RPC_INTERNAL_ERROR, "Internal error", {
           reason: "rpc_handler_failure",
+          detail: error instanceof Error ? error.message : undefined,
         });
       }
 
