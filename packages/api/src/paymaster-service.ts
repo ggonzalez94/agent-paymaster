@@ -59,6 +59,17 @@ interface PaymasterPermitRequirements {
   fields: ["value", "deadline", "signature"];
 }
 
+export interface GasPriceGuidance {
+  /** Current base fee on the target chain (hex wei). */
+  baseFeePerGas: `0x${string}`;
+  /** Suggested maxFeePerGas for UserOps (hex wei): 2×baseFee + tip. */
+  suggestedMaxFeePerGas: `0x${string}`;
+  /** Suggested maxPriorityFeePerGas (hex wei). */
+  suggestedMaxPriorityFeePerGas: `0x${string}`;
+  /** When this snapshot was taken (ISO-8601). */
+  fetchedAt: string;
+}
+
 export interface PaymasterCapabilities {
   supportedChains: PaymasterCapabilityChain[];
   supportedEntryPoints: string[];
@@ -66,6 +77,7 @@ export interface PaymasterCapabilities {
   supportedTokens: [PaymasterCapabilityToken];
   accountFactoryAddress: string | null;
   permit: PaymasterPermitRequirements;
+  gasPriceGuidance?: GasPriceGuidance;
 }
 
 interface SponsoredUserOperationMessage {
@@ -174,6 +186,15 @@ export interface PaymasterQuote {
   entryPoint: string;
   sender: string;
   tokenAddress: string;
+  gasPriceGuidance?: GasPriceGuidance;
+}
+
+/**
+ * Fetches current gas price data from the target chain.  Used to provide
+ * agents with a suggested maxFeePerGas so they don't wildly overshoot.
+ */
+export interface GasPriceOracle {
+  getGasPriceGuidance(): Promise<GasPriceGuidance | null>;
 }
 
 export interface PaymasterServiceConfig {
@@ -187,6 +208,7 @@ export interface PaymasterServiceConfig {
   defaultPaymasterPostOpGasLimit: bigint;
   tokenAddresses: Partial<Record<ChainName, string>>;
   priceProvider: PriceProvider;
+  gasPriceOracle?: GasPriceOracle;
 }
 
 export type PaymasterServiceConfigInput = Omit<
@@ -197,6 +219,7 @@ export type PaymasterServiceConfigInput = Omit<
   accountFactoryAddress?: string;
   tokenAddresses?: Partial<Record<ChainName, string>>;
   priceProvider?: PriceProvider;
+  gasPriceOracle?: GasPriceOracle;
 };
 
 const OPERATIONAL_DEFAULTS = {
@@ -554,8 +577,12 @@ export class PaymasterService {
     return supportedChains[0]?.chainId ?? CHAIN_CONFIGS[0].chainId;
   }
 
-  getCapabilities(): PaymasterCapabilities {
+  async getCapabilities(): Promise<PaymasterCapabilities> {
     const supportedChains = this.getSupportedChains();
+
+    const gasPriceGuidance = this.config.gasPriceOracle
+      ? await this.config.gasPriceOracle.getGasPriceGuidance().catch(() => null)
+      : null;
 
     return {
       supportedChains,
@@ -573,6 +600,7 @@ export class PaymasterService {
         requiredForSponsoredQuote: true,
         fields: ["value", "deadline", "signature"],
       },
+      ...(gasPriceGuidance !== null ? { gasPriceGuidance } : {}),
     };
   }
 
@@ -779,6 +807,10 @@ export class PaymasterService {
       paymasterData,
     });
 
+    const gasPriceGuidance = this.config.gasPriceOracle
+      ? await this.config.gasPriceOracle.getGasPriceGuidance().catch(() => null)
+      : null;
+
     return {
       quoteId,
       chain: parsed.chain.name,
@@ -800,6 +832,7 @@ export class PaymasterService {
       entryPoint: parsed.entryPoint,
       sender: parsed.sender,
       tokenAddress,
+      ...(gasPriceGuidance !== null ? { gasPriceGuidance } : {}),
     };
   }
 
@@ -809,7 +842,7 @@ export class PaymasterService {
     }
 
     if (method === "pm_getCapabilities") {
-      return this.getCapabilities();
+      return await this.getCapabilities();
     }
 
     if (method !== "pm_getPaymasterData" && method !== "pm_getPaymasterStubData") {
@@ -859,6 +892,7 @@ export class PaymasterService {
       maxTokenCostMicros: quote.maxTokenCostMicros,
       validUntil: quote.validUntil,
       isStub: method === "pm_getPaymasterStubData",
+      ...(quote.gasPriceGuidance !== undefined ? { gasPriceGuidance: quote.gasPriceGuidance } : {}),
     };
   }
 }

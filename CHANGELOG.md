@@ -10,6 +10,12 @@ Format:
 
 ## [Unreleased]
 
+## [v0.2.8] - 2026-03-23
+
+### Added
+
+- Gas price guidance in quote responses and capabilities. `pm_getPaymasterStubData`, `pm_getPaymasterData`, `pm_getCapabilities`, and `/capabilities` now include a `gasPriceGuidance` object with `baseFeePerGas`, `suggestedMaxFeePerGas`, and `suggestedMaxPriorityFeePerGas` fetched from the Taiko RPC. This helps agents pick a realistic `maxFeePerGas` instead of overshooting (e.g. 10 gwei vs 0.03 gwei), which can reduce USDC quote ceilings by 100×.
+
 ## [v0.2.7] - 2026-03-23
 
 ### Fixed

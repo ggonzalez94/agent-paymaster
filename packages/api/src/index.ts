@@ -8,6 +8,7 @@ import { EntryPointMonitor, type DepositHealth } from "./entrypoint-monitor.js";
 import { logEvent } from "./logger.js";
 import { MetricsRegistry } from "./metrics.js";
 import { openApiDocument } from "./openapi.js";
+import { RpcGasPriceOracle } from "./gas-price-oracle.js";
 import {
   PaymasterRpcError,
   PaymasterService,
@@ -715,7 +716,13 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
     });
 
   const paymasterService =
-    options.paymasterService ?? new PaymasterService(bundlerClient, mergedConfig.paymaster);
+    options.paymasterService ??
+    new PaymasterService(bundlerClient, {
+      ...mergedConfig.paymaster,
+      gasPriceOracle:
+        mergedConfig.paymaster.gasPriceOracle ??
+        new RpcGasPriceOracle({ rpcUrl: mergedConfig.taikoRpcUrl }),
+    });
 
   const rateLimiter =
     options.rateLimiter ??
@@ -836,7 +843,7 @@ export const createApp = (options: CreateAppOptions = {}): Hono => {
     });
   });
 
-  app.get("/capabilities", (c) => c.json(paymasterService.getCapabilities()));
+  app.get("/capabilities", async (c) => c.json(await paymasterService.getCapabilities()));
 
   app.get("/metrics", async (c) => {
     const [bundlerHealth, depositHealth] = await Promise.all([
