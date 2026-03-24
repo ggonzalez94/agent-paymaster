@@ -12,10 +12,10 @@
 
 ## File Map
 
-| Action | File | Responsibility |
-|--------|------|----------------|
-| Modify | `packages/bundler/src/index.ts` | Add `CallGasEstimator` interface, `ViemCallGasEstimator` class, wire into `BundlerService` constructor + `estimateUserOperationGas`, wire into production `createBundlerApp` boot |
-| Modify | `packages/bundler/src/index.test.ts` | Add unit tests for `CallGasEstimator` integration |
+| Action | File                                 | Responsibility                                                                                                                                                                    |
+| ------ | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Modify | `packages/bundler/src/index.ts`      | Add `CallGasEstimator` interface, `ViemCallGasEstimator` class, wire into `BundlerService` constructor + `estimateUserOperationGas`, wire into production `createBundlerApp` boot |
+| Modify | `packages/bundler/src/index.test.ts` | Add unit tests for `CallGasEstimator` integration                                                                                                                                 |
 
 No changes to `entrypoint.ts`, `paymaster-service.ts`, `shared/`, `submitter.ts`, or any Solidity.
 
@@ -24,6 +24,7 @@ No changes to `entrypoint.ts`, `paymaster-service.ts`, `shared/`, `submitter.ts`
 ### Task 1: Add `CallGasEstimator` interface and config wiring
 
 **Files:**
+
 - Modify: `packages/bundler/src/index.ts:320-326` (near existing `GasSimulator` interface)
 - Modify: `packages/bundler/src/index.ts:275-296` (`BundlerConfigInput`)
 - Modify: `packages/bundler/src/index.ts:639-689` (`BundlerService` constructor)
@@ -53,21 +54,23 @@ Returns the buffered `callGasLimit` estimate, or `null` if estimation is unavail
 - [ ] **Step 3: Add config fields to `BundlerConfig` (after line ~318)**
 
 ```typescript
-  callGasBufferPercent: bigint;
-  callGasHeuristicMultiplier: bigint;
+callGasBufferPercent: bigint;
+callGasHeuristicMultiplier: bigint;
 ```
 
 - [ ] **Step 4: Wire defaults in `BundlerService` constructor (after line ~681)**
 
 Add to the `this.config` assignment:
+
 ```typescript
       callGasBufferPercent: config.callGasBufferPercent ?? 15n,
       callGasHeuristicMultiplier: config.callGasHeuristicMultiplier ?? 3n,
 ```
 
 Store the estimator as a private field (after `this.admissionSimulator` on line ~682):
+
 ```typescript
-    this.callGasEstimator = config.callGasEstimator;
+this.callGasEstimator = config.callGasEstimator;
 ```
 
 - [ ] **Step 5: Declare the private field on `BundlerService` (after line ~647)**
@@ -98,6 +101,7 @@ git commit -m "feat(bundler): add CallGasEstimator interface and config wiring"
 ### Task 2: Implement `ViemCallGasEstimator`
 
 **Files:**
+
 - Modify: `packages/bundler/src/index.ts:597-598` (after `ViemGasSimulator`, before `ViemAdmissionSimulator`)
 
 - [ ] **Step 1: Write the `ViemCallGasEstimator` class**
@@ -173,6 +177,7 @@ git commit -m "feat(bundler): implement ViemCallGasEstimator with eth_estimateGa
 ### Task 3: Integrate `CallGasEstimator` into `estimateUserOperationGas`
 
 **Files:**
+
 - Modify: `packages/bundler/src/index.ts:861-941` (`estimateUserOperationGas` method)
 
 - [ ] **Step 1: Add call gas estimation after the heuristic baseline and before the return**
@@ -182,30 +187,30 @@ Replace the current `callGasLimit` flow (lines 873-876 and 934-940) with simulat
 After the existing heuristic computation of `callGasLimit` (line 876), and after the `gasSimulator` block (line 932), add the call gas estimation block before the return statement (before line 934):
 
 ```typescript
-    // Call gas estimation: replace heuristic with simulation when available
-    if (this.callGasEstimator !== undefined && userOperation.callGasLimit === undefined) {
-      try {
-        const simulatedCallGas = await this.callGasEstimator.estimateCallGas(
-          userOperation.sender,
-          userOperation.callData,
-          entryPoint,
-        );
-        if (simulatedCallGas !== null) {
-          callGasLimit = simulatedCallGas;
-        } else {
-          // Estimation unavailable (undeployed account or empty callData) — scale heuristic
-          callGasLimit = callGasLimit * this.config.callGasHeuristicMultiplier;
-        }
-      } catch (error) {
-        logEvent("warn", "bundler.call_gas_estimator_error", {
-          entryPoint,
-          sender: userOperation.sender,
-          reason: error instanceof Error ? error.message : "call_gas_estimation_error",
-        });
-        // Estimator threw unexpectedly — scale heuristic as fallback
-        callGasLimit = callGasLimit * this.config.callGasHeuristicMultiplier;
-      }
+// Call gas estimation: replace heuristic with simulation when available
+if (this.callGasEstimator !== undefined && userOperation.callGasLimit === undefined) {
+  try {
+    const simulatedCallGas = await this.callGasEstimator.estimateCallGas(
+      userOperation.sender,
+      userOperation.callData,
+      entryPoint,
+    );
+    if (simulatedCallGas !== null) {
+      callGasLimit = simulatedCallGas;
+    } else {
+      // Estimation unavailable (undeployed account or empty callData) — scale heuristic
+      callGasLimit = callGasLimit * this.config.callGasHeuristicMultiplier;
     }
+  } catch (error) {
+    logEvent("warn", "bundler.call_gas_estimator_error", {
+      entryPoint,
+      sender: userOperation.sender,
+      reason: error instanceof Error ? error.message : "call_gas_estimation_error",
+    });
+    // Estimator threw unexpectedly — scale heuristic as fallback
+    callGasLimit = callGasLimit * this.config.callGasHeuristicMultiplier;
+  }
+}
 ```
 
 **Important:** The declaration at line 873 is `const callGasLimit`. You must change it to `let callGasLimit` so the reassignment in this block compiles.
@@ -234,6 +239,7 @@ git commit -m "feat(bundler): integrate CallGasEstimator into gas estimation pip
 ### Task 4: Add unit tests for `CallGasEstimator` integration
 
 **Files:**
+
 - Modify: `packages/bundler/src/index.test.ts`
 
 - [ ] **Step 1: Add `FakeCallGasEstimator` mock class (after `ThrowingGasSimulator`, line ~63)**
@@ -271,6 +277,7 @@ class ThrowingCallGasEstimator implements CallGasEstimator {
 - [ ] **Step 2: Update the import to include `CallGasEstimator`**
 
 Update line 6-13 to add `CallGasEstimator`:
+
 ```typescript
 import {
   type AdmissionSimulator,
@@ -289,21 +296,21 @@ import {
 Add in the `estimateUserOperationGas` describe block (after the existing gas estimation tests, around line ~573):
 
 ```typescript
-  it("uses call gas estimator when available", async () => {
-    const serviceWithCallGas = new BundlerService({
-      chainId: 167000,
-      entryPoints: [ENTRY_POINT_V07],
-      callGasEstimator: new FakeCallGasEstimator(200_000n),
-    });
-
-    const estimate = await serviceWithCallGas.estimateUserOperationGas(
-      buildUserOperation(),
-      ENTRY_POINT_V07,
-    );
-
-    // 200000 = 0x30d40
-    expect(estimate.callGasLimit).toBe("0x30d40");
+it("uses call gas estimator when available", async () => {
+  const serviceWithCallGas = new BundlerService({
+    chainId: 167000,
+    entryPoints: [ENTRY_POINT_V07],
+    callGasEstimator: new FakeCallGasEstimator(200_000n),
   });
+
+  const estimate = await serviceWithCallGas.estimateUserOperationGas(
+    buildUserOperation(),
+    ENTRY_POINT_V07,
+  );
+
+  // 200000 = 0x30d40
+  expect(estimate.callGasLimit).toBe("0x30d40");
+});
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -314,21 +321,21 @@ Expected: New test passes. `callGasLimit` is `0x30d40` (200,000) instead of the 
 - [ ] **Step 5: Add test — estimator returns null triggers heuristic × multiplier**
 
 ```typescript
-  it("scales heuristic when call gas estimator returns null", async () => {
-    const serviceWithNullEstimator = new BundlerService({
-      chainId: 167000,
-      entryPoints: [ENTRY_POINT_V07],
-      callGasEstimator: new FakeCallGasEstimator(null),
-    });
-
-    const estimate = await serviceWithNullEstimator.estimateUserOperationGas(
-      buildUserOperation(),
-      ENTRY_POINT_V07,
-    );
-
-    // Heuristic: 55000 + 2*16 = 55032. Multiplied by 3: 165096 = 0x284e8
-    expect(estimate.callGasLimit).toBe("0x284e8");
+it("scales heuristic when call gas estimator returns null", async () => {
+  const serviceWithNullEstimator = new BundlerService({
+    chainId: 167000,
+    entryPoints: [ENTRY_POINT_V07],
+    callGasEstimator: new FakeCallGasEstimator(null),
   });
+
+  const estimate = await serviceWithNullEstimator.estimateUserOperationGas(
+    buildUserOperation(),
+    ENTRY_POINT_V07,
+  );
+
+  // Heuristic: 55000 + 2*16 = 55032. Multiplied by 3: 165096 = 0x284e8
+  expect(estimate.callGasLimit).toBe("0x284e8");
+});
 ```
 
 - [ ] **Step 6: Run test to verify**
@@ -339,21 +346,21 @@ Expected: PASS
 - [ ] **Step 7: Add test — estimator throws triggers heuristic × multiplier**
 
 ```typescript
-  it("scales heuristic when call gas estimator throws", async () => {
-    const serviceWithThrowingEstimator = new BundlerService({
-      chainId: 167000,
-      entryPoints: [ENTRY_POINT_V07],
-      callGasEstimator: new ThrowingCallGasEstimator(),
-    });
-
-    const estimate = await serviceWithThrowingEstimator.estimateUserOperationGas(
-      buildUserOperation(),
-      ENTRY_POINT_V07,
-    );
-
-    // Same as null case — heuristic × 3
-    expect(estimate.callGasLimit).toBe("0x284e8");
+it("scales heuristic when call gas estimator throws", async () => {
+  const serviceWithThrowingEstimator = new BundlerService({
+    chainId: 167000,
+    entryPoints: [ENTRY_POINT_V07],
+    callGasEstimator: new ThrowingCallGasEstimator(),
   });
+
+  const estimate = await serviceWithThrowingEstimator.estimateUserOperationGas(
+    buildUserOperation(),
+    ENTRY_POINT_V07,
+  );
+
+  // Same as null case — heuristic × 3
+  expect(estimate.callGasLimit).toBe("0x284e8");
+});
 ```
 
 - [ ] **Step 8: Run test to verify**
@@ -364,21 +371,21 @@ Expected: PASS
 - [ ] **Step 9: Add test — client-provided callGasLimit is respected (not overridden)**
 
 ```typescript
-  it("respects client-provided callGasLimit even with call gas estimator", async () => {
-    const serviceWithCallGas = new BundlerService({
-      chainId: 167000,
-      entryPoints: [ENTRY_POINT_V07],
-      callGasEstimator: new FakeCallGasEstimator(200_000n),
-    });
-
-    const estimate = await serviceWithCallGas.estimateUserOperationGas(
-      buildUserOperation({ callGasLimit: "0x50000" }),
-      ENTRY_POINT_V07,
-    );
-
-    // Client provided 0x50000 (327680) — should be used as-is
-    expect(estimate.callGasLimit).toBe("0x50000");
+it("respects client-provided callGasLimit even with call gas estimator", async () => {
+  const serviceWithCallGas = new BundlerService({
+    chainId: 167000,
+    entryPoints: [ENTRY_POINT_V07],
+    callGasEstimator: new FakeCallGasEstimator(200_000n),
   });
+
+  const estimate = await serviceWithCallGas.estimateUserOperationGas(
+    buildUserOperation({ callGasLimit: "0x50000" }),
+    ENTRY_POINT_V07,
+  );
+
+  // Client provided 0x50000 (327680) — should be used as-is
+  expect(estimate.callGasLimit).toBe("0x50000");
+});
 ```
 
 - [ ] **Step 10: Run test to verify**
@@ -389,22 +396,22 @@ Expected: PASS
 - [ ] **Step 11: Add test — custom buffer percent and heuristic multiplier**
 
 ```typescript
-  it("applies custom buffer percent and heuristic multiplier", async () => {
-    const serviceWithCustomConfig = new BundlerService({
-      chainId: 167000,
-      entryPoints: [ENTRY_POINT_V07],
-      callGasEstimator: new FakeCallGasEstimator(null),
-      callGasHeuristicMultiplier: 5n,
-    });
-
-    const estimate = await serviceWithCustomConfig.estimateUserOperationGas(
-      buildUserOperation(),
-      ENTRY_POINT_V07,
-    );
-
-    // Heuristic: 55032. Multiplied by 5: 275160 = 0x432d8
-    expect(estimate.callGasLimit).toBe("0x432d8");
+it("applies custom buffer percent and heuristic multiplier", async () => {
+  const serviceWithCustomConfig = new BundlerService({
+    chainId: 167000,
+    entryPoints: [ENTRY_POINT_V07],
+    callGasEstimator: new FakeCallGasEstimator(null),
+    callGasHeuristicMultiplier: 5n,
   });
+
+  const estimate = await serviceWithCustomConfig.estimateUserOperationGas(
+    buildUserOperation(),
+    ENTRY_POINT_V07,
+  );
+
+  // Heuristic: 55032. Multiplied by 5: 275160 = 0x432d8
+  expect(estimate.callGasLimit).toBe("0x432d8");
+});
 ```
 
 - [ ] **Step 12: Run full test suite**
@@ -424,6 +431,7 @@ git commit -m "test(bundler): add CallGasEstimator integration tests"
 ### Task 5: Wire `ViemCallGasEstimator` into production boot
 
 **Files:**
+
 - Modify: `packages/bundler/src/index.ts:2094-2108` (production boot block)
 
 - [ ] **Step 1: Add `callGasEstimator` to the `BundlerService` constructor call**
@@ -431,22 +439,22 @@ git commit -m "test(bundler): add CallGasEstimator integration tests"
 In the `createBundlerApp` production block (line ~2094), add `callGasEstimator` alongside the existing `gasSimulator`:
 
 ```typescript
-  const service = new BundlerService(
-    {
-      chainId,
-      acceptUserOperations: submissionEnabled,
-      maxFinalizedOperations: parsePositiveIntegerWithFallback(
-        process.env.BUNDLER_MAX_FINALIZED_OPERATIONS,
-        10_000,
-      ),
-      gasSimulator: new ViemGasSimulator(chainRpcUrl, chain),
-      callGasEstimator: new ViemCallGasEstimator(chainRpcUrl, chain),
-      admissionSimulator: submissionEnabled
-        ? new ViemAdmissionSimulator(chainRpcUrl, chain)
-        : undefined,
-    },
-    persistence,
-  );
+const service = new BundlerService(
+  {
+    chainId,
+    acceptUserOperations: submissionEnabled,
+    maxFinalizedOperations: parsePositiveIntegerWithFallback(
+      process.env.BUNDLER_MAX_FINALIZED_OPERATIONS,
+      10_000,
+    ),
+    gasSimulator: new ViemGasSimulator(chainRpcUrl, chain),
+    callGasEstimator: new ViemCallGasEstimator(chainRpcUrl, chain),
+    admissionSimulator: submissionEnabled
+      ? new ViemAdmissionSimulator(chainRpcUrl, chain)
+      : undefined,
+  },
+  persistence,
+);
 ```
 
 - [ ] **Step 2: Run build**
@@ -471,6 +479,7 @@ git commit -m "feat(bundler): wire ViemCallGasEstimator into production boot"
 ### Task 6: Update exports and verify integration
 
 **Files:**
+
 - Modify: `packages/bundler/src/index.ts` (exports)
 
 - [ ] **Step 1: Verify `CallGasEstimator` and `ViemCallGasEstimator` are exported**
@@ -499,6 +508,7 @@ git commit -m "style(bundler): format after call gas estimator changes"
 ### Task 7: Update documentation
 
 **Files:**
+
 - Modify: `CLAUDE.md`
 - Modify: `README.md` (if it documents gas estimation)
 
