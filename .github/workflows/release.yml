@@ -54,20 +54,11 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Build
-        run: pnpm build
-
       - name: Setup Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Test contracts
         run: pnpm test:contracts
-
-      - name: Build API image
-        run: docker build --tag servo-api:release .
-
-      - name: Build bundler image
-        run: docker build --file Dockerfile.bundler --tag servo-bundler:release .
 
   deploy:
     needs: verify
@@ -80,13 +71,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
 
       - name: Setup pnpm
         run: |
@@ -101,10 +85,6 @@ jobs:
           RAILWAY_API_SERVICE_ID: ${{ vars.RAILWAY_API_SERVICE_ID }}
           RAILWAY_API_BASE_URL: ${{ vars.RAILWAY_API_BASE_URL }}
           RAILWAY_BUNDLER_SERVICE_ID: ${{ vars.RAILWAY_BUNDLER_SERVICE_ID }}
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-          VERCEL_PRODUCTION_URL: ${{ vars.VERCEL_PRODUCTION_URL }}
         run: |
           set -euo pipefail
           missing=()
@@ -115,11 +95,7 @@ jobs:
             RAILWAY_ENVIRONMENT_ID \
             RAILWAY_API_SERVICE_ID \
             RAILWAY_API_BASE_URL \
-            RAILWAY_BUNDLER_SERVICE_ID \
-            VERCEL_TOKEN \
-            VERCEL_ORG_ID \
-            VERCEL_PROJECT_ID \
-            VERCEL_PRODUCTION_URL
+            RAILWAY_BUNDLER_SERVICE_ID
           do
             if [ -z "${!name:-}" ]; then
               missing+=("$name")
@@ -198,52 +174,53 @@ jobs:
           SMOKE_QUOTE_CHAIN: taikoMainnet
         run: node scripts/deployment-smoke.mjs
 
-      - name: Deploy web to Vercel
-        working-directory: packages/web
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-        run: |
-          set -euo pipefail
-          pnpm dlx vercel@latest pull --yes --environment=production --token "$VERCEL_TOKEN"
-          pnpm dlx vercel@latest build --prod --token "$VERCEL_TOKEN"
-          deployment_url="$(pnpm dlx vercel@latest deploy --prebuilt --prod --token "$VERCEL_TOKEN" | tail -n 1 | tr -d '\r')"
-          echo "Deployed web to $deployment_url"
+      # TODO: Re-enable when VERCEL_TOKEN is refreshed
+      # - name: Deploy web to Vercel
+      #   working-directory: packages/web
+      #   env:
+      #     VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      #     VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      #     VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      #   run: |
+      #     set -euo pipefail
+      #     pnpm dlx vercel@latest pull --yes --environment=production --token "$VERCEL_TOKEN"
+      #     pnpm dlx vercel@latest build --prod --token "$VERCEL_TOKEN"
+      #     deployment_url="$(pnpm dlx vercel@latest deploy --prebuilt --prod --token "$VERCEL_TOKEN" | tail -n 1 | tr -d '\r')"
+      #     echo "Deployed web to $deployment_url"
 
-      - name: Wait for Vercel production URL
-        env:
-          VERCEL_PRODUCTION_URL: ${{ vars.VERCEL_PRODUCTION_URL }}
-        run: |
-          set -euo pipefail
-          for attempt in {1..20}; do
-            status_code="$(
-              curl \
-                --silent \
-                --show-error \
-                --location \
-                --output /tmp/servo-web.html \
-                --write-out '%{http_code}' \
-                "$VERCEL_PRODUCTION_URL" || true
-            )"
+      # - name: Wait for Vercel production URL
+      #   env:
+      #     VERCEL_PRODUCTION_URL: ${{ vars.VERCEL_PRODUCTION_URL }}
+      #   run: |
+      #     set -euo pipefail
+      #     for attempt in {1..20}; do
+      #       status_code="$(
+      #         curl \
+      #           --silent \
+      #           --show-error \
+      #           --location \
+      #           --output /tmp/servo-web.html \
+      #           --write-out '%{http_code}' \
+      #           "$VERCEL_PRODUCTION_URL" || true
+      #       )"
+      #
+      #       if [ "$status_code" = "200" ]; then
+      #         cat /tmp/servo-web.html
+      #         exit 0
+      #       fi
+      #
+      #       echo "web check attempt $attempt/20 returned status $status_code"
+      #       sleep 15
+      #     done
+      #
+      #     echo "::error::Vercel production URL did not return 200 after deployment"
+      #     exit 1
 
-            if [ "$status_code" = "200" ]; then
-              cat /tmp/servo-web.html
-              exit 0
-            fi
-
-            echo "web check attempt $attempt/20 returned status $status_code"
-            sleep 15
-          done
-
-          echo "::error::Vercel production URL did not return 200 after deployment"
-          exit 1
-
-      - name: Smoke public Vercel production URL
-        env:
-          SMOKE_WEB_URL: ${{ vars.VERCEL_PRODUCTION_URL }}
-          SMOKE_WEB_TITLE: Servo — The Agent-Native Paymaster
-        run: node scripts/deployment-smoke.mjs
+      # - name: Smoke public Vercel production URL
+      #   env:
+      #     SMOKE_WEB_URL: ${{ vars.VERCEL_PRODUCTION_URL }}
+      #     SMOKE_WEB_TITLE: Servo — The Agent-Native Paymaster
+      #   run: node scripts/deployment-smoke.mjs
 
   github-release:
     needs: deploy

@@ -127,11 +127,11 @@ Release contract:
 
 Workflow behavior:
 
-- Re-runs lint, format, TypeScript tests, builds, Solidity tests, and both Docker image builds.
+- Re-runs lint, format, TypeScript tests, and Solidity tests.
 - Deploys the bundler with `railway.bundler.json`, then the API with `railway.api.json`.
 - Waits for API `/health`, then smoke tests `/status`, `/rpc`, and `pm_getPaymasterData`.
-- Deploys `packages/web` to Vercel production, waits for the public production URL, and smoke tests the live site over anonymous HTTP.
 - Creates or updates the GitHub Release from the matching `CHANGELOG.md` section.
+- Vercel web deploy is currently commented out (pending token refresh).
 - Opts GitHub JavaScript actions into Node 24 and uses the current official action majors so release runs stay ahead of the June 2026 runner default.
 
 Required GitHub Actions variables:
@@ -141,16 +141,12 @@ Required GitHub Actions variables:
 - `RAILWAY_API_SERVICE_ID`
 - `RAILWAY_BUNDLER_SERVICE_ID`
 - `RAILWAY_API_BASE_URL`
-- `VERCEL_ORG_ID`
-- `VERCEL_PROJECT_ID`
-- `VERCEL_PRODUCTION_URL`
 
 Required GitHub Actions secrets:
 
 - `RAILWAY_API_TOKEN`
-- `VERCEL_TOKEN`
 
-Vercel should use standard deployment protection (`prod_deployment_urls_and_all_previews`) so preview deployments stay protected while the production URL stays public.
+Railway config: `railway.api.json` and `railway.bundler.json` are the in-repo service manifests. The CI workflow copies the appropriate one to `railway.json` before each `railway up` invocation.
 
 ## Conventions
 
@@ -171,7 +167,6 @@ Vercel should use standard deployment protection (`prod_deployment_urls_and_all_
 - **Quote TTL**: quotes expire (default 90s). Tests that hold quotes too long will fail on-chain.
 - **Packed format**: ERC-4337 v0.7 uses packed UserOp format. Don't confuse with v0.6 struct layout.
 - **Docker**: two separate Dockerfiles — `Dockerfile` (API) and `Dockerfile.bundler`. Both expose `/health`.
-- **Railway config**: `railway.api.json` and `railway.bundler.json` are the in-repo service manifests used by the release workflow
 
 ## Config Defaults Worth Knowing
 
