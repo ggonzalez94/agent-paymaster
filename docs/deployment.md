@@ -11,19 +11,6 @@
 | **ServoAccountFactory** | `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716` | Deterministic CREATE2 factory for agent wallets. Deploys the current ServoAccount implementation with ERC-1271 validation and ERC-721 safe-receive support for registry `_safeMint` flows. |
 | **USDC**                | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b` | Circle's bridged USDC on Taiko. 6 decimals. Supports both ERC-2612 permit variants (v/r/s and bytes signature).                                                                            |
 
-### Factory rotation (2026-03-24)
-
-Servo rotated the Taiko mainnet account factory after confirming that the previous ServoAccount implementation could not receive ERC-721s minted with `_safeMint`. The fix was to inherit OpenZeppelin `ERC721Holder` in `ServoAccount`, which changes the account creation bytecode and therefore requires a new factory deployment for all new counterfactual addresses.
-
-- Deployment tx: `0x1e68e97935c41255a94b6bca9d4be9832a392dac7111a5cf5ac179f97619aaae`
-- Block: `4,883,852`
-- Deployer: `0x2AB05c081B31B3882C1c0367D9b734e530237B15`
-- Gas used: `798,412`
-- Effective gas price: `10,000,001 wei`
-- ETH spent from the testing wallet: `0.000007984120798412 ETH`
-
-Migration rule: any new agent that must register in the ERC-8004 registry, or otherwise receive ERC-721 `_safeMint`s, must derive addresses from `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716`.
-
 ### Paymaster configuration
 
 | Parameter                 | Value       | Description                                                                                        |
