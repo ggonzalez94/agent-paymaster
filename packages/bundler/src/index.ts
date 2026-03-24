@@ -2192,6 +2192,7 @@ if (process.env.NODE_ENV !== "test") {
         10_000,
       ),
       gasSimulator: new ViemGasSimulator(chainRpcUrl, chain),
+      callGasEstimator: new ViemCallGasEstimator(chainRpcUrl, chain),
       admissionSimulator: submissionEnabled
         ? new ViemAdmissionSimulator(chainRpcUrl, chain)
         : undefined,
