@@ -554,6 +554,19 @@ const parsePositiveIntegerWithFallback = (value: string | undefined, fallback: n
   return parsed;
 };
 
+const parseBigIntWithFallback = (value: string | undefined, fallback: bigint): bigint => {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  try {
+    const parsed = BigInt(value);
+    return parsed >= 0n ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const resolveChainById = (chainId: number): Chain | undefined => {
   switch (chainId) {
     case 167000:
@@ -2192,7 +2205,11 @@ if (process.env.NODE_ENV !== "test") {
         10_000,
       ),
       gasSimulator: new ViemGasSimulator(chainRpcUrl, chain),
-      callGasEstimator: new ViemCallGasEstimator(chainRpcUrl, chain),
+      callGasEstimator: new ViemCallGasEstimator(
+        chainRpcUrl,
+        chain,
+        parseBigIntWithFallback(process.env.BUNDLER_CALL_GAS_BUFFER_PERCENT, 15n),
+      ),
       admissionSimulator: submissionEnabled
         ? new ViemAdmissionSimulator(chainRpcUrl, chain)
         : undefined,
