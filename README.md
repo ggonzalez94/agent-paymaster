@@ -24,8 +24,6 @@ Key addresses on Taiko Alethia (chain 167000):
 
 See [docs/deployment.md](docs/deployment.md) for the full deployment reference (all contracts, accounts, infrastructure).
 
-Use the current factory above for all new agent wallets. The legacy factory at `0xCa245Ae9B786EF420Dc359430e5833b840880619` deploys pre-rotation Servo accounts without `IERC721Receiver`, so ERC-8004 registry `_safeMint` calls revert with `ERC721InvalidReceiver`.
-
 The flow for an agent is:
 
 1. Derive a counterfactual wallet address from the ServoAccountFactory (`getAddress(owner, salt)`)

@@ -162,7 +162,6 @@ Railway config: `railway.api.json` and `railway.bundler.json` are the in-repo se
 
 - **Build order matters**: `shared` must build before `api` or `bundler`. The root `pnpm build` and `pnpm test` commands handle this, but if you run package scripts directly on a fresh clone, build dependencies first.
 - **Submodules**: contract tests fail without submodules. Use `git submodule update --init --recursive` if you didn't clone with `--recurse-submodules`.
-- **Legacy factory**: the old Taiko mainnet factory `0xCa245Ae9B786EF420Dc359430e5833b840880619` deploys pre-fix accounts that do not implement `IERC721Receiver`. Use `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716` for any new wallet that must receive ERC-721 `_safeMint`s such as the ERC-8004 registry.
 - **SQLite WAL**: the bundler and API share a SQLite volume. Don't delete `./data/` while services are running.
 - **Bundler read-only mode**: if `BUNDLER_SUBMITTER_PRIVATE_KEY` is unset, the bundler rejects `eth_sendUserOperation` instead of accepting UserOps it cannot submit.
 - **Quote TTL**: quotes expire (default 90s). Tests that hold quotes too long will fail on-chain.
