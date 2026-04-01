@@ -681,19 +681,19 @@ export class PaymasterService {
       throw new Error(`Chain ${parsed.chain.name} is not configured`);
     }
 
-    // The bundler requires initCode and a non-empty signature for gas
-    // estimation, but callers of pm_getPaymasterStubData typically send
-    // minimal UserOps before they have a real signature.  Inject safe
-    // defaults so the estimation succeeds without mutating the caller's
-    // original object.
-    const estimationUserOp = {
+    // Normalize deployment fields to packed initCode before forwarding to the
+    // bundler so v0.7 factory/factoryData callers don't become ambiguous when
+    // we inject estimation defaults.
+    const estimationUserOp: Record<string, unknown> = {
       ...parsed.userOperation,
-      initCode: parsed.userOperation.initCode ?? "0x",
+      initCode: parsed.initCode,
       signature:
         parsed.userOperation.signature && parsed.userOperation.signature !== "0x"
           ? parsed.userOperation.signature
           : DUMMY_SIGNATURE,
     };
+    delete estimationUserOp.factory;
+    delete estimationUserOp.factoryData;
 
     const gasEstimateResponse = await this.bundlerClient.rpc({
       jsonrpc: "2.0",
