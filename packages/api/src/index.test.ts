@@ -741,7 +741,6 @@ describe("api gateway", () => {
       callData: SAMPLE_USER_OPERATION.callData,
       maxFeePerGas: SAMPLE_USER_OPERATION.maxFeePerGas,
       maxPriorityFeePerGas: SAMPLE_USER_OPERATION.maxPriorityFeePerGas,
-      signature: SAMPLE_USER_OPERATION.signature,
     };
 
     const response = await app.request("/rpc", {
@@ -767,6 +766,44 @@ describe("api gateway", () => {
     expect(sentUserOp.initCode).toBe(`${TEST_FACTORY_ADDRESS}${factoryData.slice(2)}`);
     expect(sentUserOp.factory).toBeUndefined();
     expect(sentUserOp.factoryData).toBeUndefined();
+    expect(sentUserOp.signature).toBeDefined();
+    expect(sentUserOp.signature).not.toBe("0x");
+  });
+
+  it("pm_getPaymasterStubData rejects invalid v0.7 factory length before estimation", async () => {
+    const bundlerClient = new FakeBundlerClient();
+    const app = createTestApp(bundlerClient);
+
+    const response = await app.request("/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 23,
+        method: "pm_getPaymasterStubData",
+        params: [
+          {
+            sender: SAMPLE_USER_OPERATION.sender,
+            nonce: SAMPLE_USER_OPERATION.nonce,
+            factory: "0x1234",
+            factoryData: "0xabcdef",
+            callData: SAMPLE_USER_OPERATION.callData,
+            maxFeePerGas: SAMPLE_USER_OPERATION.maxFeePerGas,
+            maxPriorityFeePerGas: SAMPLE_USER_OPERATION.maxPriorityFeePerGas,
+          },
+          ENTRY_POINT_V07,
+          "taikoMainnet",
+          {},
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.error.code).toBe(-32602);
+    expect(payload.error.message).toContain("userOperation.factory must be a 20-byte address");
+    expect(bundlerClient.rpcCalls).toHaveLength(0);
   });
 
   it("pm_getPaymasterStubData preserves caller-provided initCode and signature", async () => {

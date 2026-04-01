@@ -429,6 +429,9 @@ const resolveInitCodeFromInput = (userOp: Record<string, unknown>): `0x${string}
     if (factory === "0x") {
       return "0x";
     }
+    if (factory.length !== 42) {
+      throw new Error("userOperation.factory must be a 20-byte address");
+    }
     const factoryData = parseBytes(userOp.factoryData ?? "0x", "userOperation.factoryData");
     return `${factory}${factoryData.slice(2)}` as `0x${string}`;
   }
@@ -684,16 +687,17 @@ export class PaymasterService {
     // Normalize deployment fields to packed initCode before forwarding to the
     // bundler so v0.7 factory/factoryData callers don't become ambiguous when
     // we inject estimation defaults.
-    const estimationUserOp: Record<string, unknown> = {
-      ...parsed.userOperation,
+    const estimationUserOpBase: Record<string, unknown> = { ...parsed.userOperation };
+    delete estimationUserOpBase.factory;
+    delete estimationUserOpBase.factoryData;
+    const estimationUserOp = {
+      ...estimationUserOpBase,
       initCode: parsed.initCode,
       signature:
         parsed.userOperation.signature && parsed.userOperation.signature !== "0x"
           ? parsed.userOperation.signature
           : DUMMY_SIGNATURE,
     };
-    delete estimationUserOp.factory;
-    delete estimationUserOp.factoryData;
 
     const gasEstimateResponse = await this.bundlerClient.rpc({
       jsonrpc: "2.0",
