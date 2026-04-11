@@ -2,9 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
-import {IEntryPoint} from "account-abstraction/contracts/interfaces/IEntryPoint.sol";
 import {EntryPoint} from "account-abstraction/contracts/core/EntryPoint.sol";
-import {TaikoUsdcPaymaster} from "../src/TaikoUsdcPaymaster.sol";
+import {ServoPaymaster} from "../src/ServoPaymaster.sol";
 import {ServoAccountFactory} from "../src/ServoAccountFactory.sol";
 import {MockERC20Permit} from "../test/mocks/MockERC20Permit.sol";
 
@@ -12,6 +11,7 @@ import {MockERC20Permit} from "../test/mocks/MockERC20Permit.sol";
 contract DeployAnvilFixture is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
         address quoteSigner = vm.envAddress("QUOTE_SIGNER_ADDRESS");
         string memory outputPath = vm.envOr("FIXTURE_OUTPUT_PATH", string("/tmp/servo-anvil-fixture.json"));
 
@@ -19,24 +19,18 @@ contract DeployAnvilFixture is Script {
 
         EntryPoint entryPoint = new EntryPoint();
         MockERC20Permit usdc = new MockERC20Permit();
-        TaikoUsdcPaymaster paymaster = new TaikoUsdcPaymaster(
-            IEntryPoint(address(entryPoint)),
-            address(usdc),
-            quoteSigner,
-            1_000_000,   // maxVerificationGasLimit (1M — generous for CREATE2 deployment)
-            200_000,     // maxPostOpOverheadGas
-            1 ether,     // maxNativeCostWei
-            300,         // maxQuoteTtlSeconds
-            1_000        // maxSurchargeBps (10%)
-        );
-        ServoAccountFactory factory = new ServoAccountFactory(IEntryPoint(address(entryPoint)));
 
-        // Fund the paymaster's EntryPoint deposit
+        address[] memory signers = new address[](1);
+        signers[0] = quoteSigner;
+
+        ServoPaymaster paymaster = new ServoPaymaster(address(entryPoint), deployer, deployer, signers);
+        ServoAccountFactory factory = new ServoAccountFactory(entryPoint);
+
+        // Fund the paymaster's EntryPoint deposit.
         entryPoint.depositTo{value: 2 ether}(address(paymaster));
 
         vm.stopBroadcast();
 
-        // Write fixture addresses as JSON
         string memory json = string.concat(
             '{"entryPoint":"', vm.toString(address(entryPoint)),
             '","usdc":"', vm.toString(address(usdc)),

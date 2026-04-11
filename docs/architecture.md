@@ -92,8 +92,9 @@ Responsibilities:
 
 - Compute max USDC charge from gas bounds and signed pricing policy.
 - Read ETH/USD and USDC/USD off-chain from Chainlink mainnet, with Coinbase and Kraken fallback quorum checks.
-- Sign quote payload (EIP-712) consumed by paymaster validation.
-- Enforce quote expiry, nonce uniqueness, and risk margins.
+- Sign quote payload as an EIP-191 `personal_sign` over Pimlico's custom UserOp hash (see `SingletonPaymasterV7._getHash`).
+- Bake the Servo surcharge (default 5%) into the signed `exchangeRate` rather than carrying a separate BPS field.
+- Enforce quote expiry via `validUntil` / `validAfter` and gas-cost bounds off-chain before signing.
 
 Inputs:
 
@@ -129,10 +130,10 @@ Responsibilities:
 
 ## 8.1 Contracts
 
-- `TaikoUsdcPaymaster` (main contract)
-  - Inherits `BasePaymaster` (ERC-4337 compatible base).
-  - Supports packed `paymasterData` with permit and quote signature fields.
-  - Emits sponsorship accounting events.
+- `ServoPaymaster` (main contract)
+  - Inherits Pimlico's `SingletonPaymasterV7` (vendored from `pimlicolabs/singleton-paymaster` under `packages/paymaster-contracts/src/pimlico/`) and adds an admin-gated `withdrawToken` sweep for the pooled treasury.
+  - ERC-20 mode only in practice; Servo pools USDC on the contract itself (`treasury = address(this)`).
+  - Emits Pimlico's `UserOperationSponsored` event on every charged UserOp.
 - `ServoAccount` (canonical agent account)
   - Single-owner ERC-4337 account used by ServoAccountFactory.
   - Supports ERC-1271 permit validation and ERC-721 safe receipt via OpenZeppelin `ERC721Holder`, so registries that mint with `_safeMint` can mint directly to the account.
@@ -141,17 +142,24 @@ Responsibilities:
 - `PriceSafetyConfig` (optional module)
   - Stores protocol-level guardrails (max surcharge, max quote TTL, max gas limits).
 
-## 8.2 Paymaster Data Layout (MVP)
+## 8.2 Paymaster Data Layout (Pimlico ERC-20 Mode)
 
-Packed fields:
+`paymasterAndData` = outer envelope || inner config || signature. Exact byte offsets are parsed by
+`BaseSingletonPaymaster._parseErc20Config`:
 
-- mode/version byte
-- token address (`USDC`)
-- max token charge
-- quote expiry
-- quote nonce
-- quote signature
-- optional permit payload/signature
+- paymaster address (20 bytes)
+- paymasterVerificationGasLimit (16 bytes)
+- paymasterPostOpGasLimit (16 bytes)
+- mode + allowAllBundlers byte (1 byte): `(mode << 1) | allowAllBundlers` — Servo sends `0x03`
+- flags byte (1 byte): bit 0 = constantFeePresent, bit 1 = recipientPresent, bit 2 = preFundPresent — Servo sends `0x00`
+- validUntil (6 bytes)
+- validAfter (6 bytes)
+- token (20 bytes) = USDC
+- postOpGas (16 bytes) — Pimlico penalty calculation input
+- exchangeRate (32 bytes) = tokens per 1 ETH (1e18 wei) in token base units, with the 5% Servo surcharge already baked in
+- paymasterValidationGasLimit (16 bytes)
+- treasury (20 bytes) = the `ServoPaymaster` contract itself
+- signature (64 or 65 bytes): `personal_sign(keccak256(abi.encode(userOpHashCustom, chainId)))` from the `PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY` account
 
 ## 8.3 Validation Path
 

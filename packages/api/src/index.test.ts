@@ -294,10 +294,10 @@ describe("api gateway", () => {
     const payload = await response.json();
     expect(payload.result.supportedEntryPoints).toEqual([ENTRY_POINT_V07]);
     expect(payload.result.accountFactoryAddress).toBe(TEST_FACTORY_ADDRESS);
-    expect(payload.result.permit).toEqual({
+    expect(payload.result.allowance).toEqual({
       standard: "EIP-2612",
-      requiredForSponsoredQuote: true,
-      fields: ["value", "deadline", "signature"],
+      spender: "paymaster",
+      bootstrap: "setup-userop",
     });
     expect(bundlerClient.rpcCalls).toHaveLength(0);
   });
@@ -556,7 +556,7 @@ describe("api gateway", () => {
     ).toThrow("PAYMASTER_STATIC_USDC_PER_ETH_MICROS is no longer supported");
   });
 
-  it("pm_getPaymasterData with permit context embeds permit", async () => {
+  it("pm_getPaymasterData returns an ERC-20 mode Pimlico paymasterData blob", async () => {
     const bundlerClient = new FakeBundlerClient();
     const app = createTestApp(bundlerClient);
 
@@ -569,92 +569,23 @@ describe("api gateway", () => {
         jsonrpc: "2.0",
         id: 10,
         method: "pm_getPaymasterData",
-        params: [
-          SAMPLE_USER_OPERATION,
-          ENTRY_POINT_V07,
-          "taikoMainnet",
-          {
-            permit: {
-              value: "999999999",
-              deadline: "1900000000",
-              signature: "0xaabbccdd",
-            },
-          },
-        ],
+        params: [SAMPLE_USER_OPERATION, ENTRY_POINT_V07, "taikoMainnet"],
       }),
     });
 
     expect(response.status).toBe(200);
-
     const payload = await response.json();
-    expect(payload.result.paymasterData).toContain("aabbccdd");
+    expect(payload.result.paymasterData).toBeDefined();
+
+    // 118-byte inner config + 65-byte signature = 183 bytes = 366 hex chars + "0x" prefix.
+    const paymasterData: string = payload.result.paymasterData;
+    expect(paymasterData.length).toBe(2 + (118 + 65) * 2);
+
+    // First byte of paymasterData = mode byte = (1 << 1) | 1 = 0x03 (ERC20 + allowAllBundlers).
+    expect(paymasterData.slice(2, 4)).toBe("03");
   });
 
-  it("pm_getPaymasterData rejects permit below maxTokenCost", async () => {
-    const bundlerClient = new FakeBundlerClient();
-    const app = createTestApp(bundlerClient);
-
-    const response = await app.request("/rpc", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 11,
-        method: "pm_getPaymasterData",
-        params: [
-          SAMPLE_USER_OPERATION,
-          ENTRY_POINT_V07,
-          "taikoMainnet",
-          {
-            permit: {
-              value: "0",
-              deadline: "1900000000",
-              signature: "0xaabbccdd",
-            },
-          },
-        ],
-      }),
-    });
-
-    expect(response.status).toBe(200);
-
-    const payload = await response.json();
-    expect(payload.error).toBeDefined();
-    expect(payload.error.code).toBe(-32602);
-    expect(payload.error.message).toContain("Permit value");
-  });
-
-  it("pm_getPaymasterData rejects malformed permit context with structured error", async () => {
-    const bundlerClient = new FakeBundlerClient();
-    const app = createTestApp(bundlerClient);
-
-    const response = await app.request("/rpc", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 11.5,
-        method: "pm_getPaymasterData",
-        params: [SAMPLE_USER_OPERATION, ENTRY_POINT_V07, "taikoMainnet", { permit: "0xdeadbeef" }],
-      }),
-    });
-
-    expect(response.status).toBe(200);
-
-    const payload = await response.json();
-    expect(payload.error).toBeDefined();
-    expect(payload.error.code).toBe(-32602);
-    expect(payload.error.message).toBe("Invalid permit context");
-    expect(payload.error.data?.reason).toBe("permit_invalid");
-    expect(payload.error.data?.detail).toContain("context.permit must be an object");
-    expect(bundlerClient.rpcCalls).toHaveLength(0);
-  });
-
-  it("pm_getPaymasterStubData ignores permit context", async () => {
+  it("pm_getPaymasterStubData ignores extra context params", async () => {
     const bundlerClient = new FakeBundlerClient();
     const app = createTestApp(bundlerClient);
 

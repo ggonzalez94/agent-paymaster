@@ -8,12 +8,6 @@ export interface ServoCall {
   data: Hex;
 }
 
-export interface PermitContext {
-  value: string;
-  deadline: string;
-  signature: Hex;
-}
-
 /** Servo-specific response from pm_getPaymasterData / pm_getPaymasterStubData. */
 export interface PaymasterQuote {
   paymaster: Address;
@@ -36,6 +30,11 @@ export interface PaymasterQuote {
 export interface CreateAndExecuteResult {
   counterfactualAddress: Address;
   quote: PaymasterQuote;
-  permit: PermitContext;
   userOperationHash: Hex;
+  /**
+   * Hash of the one-time bootstrap UserOperation Servo sends when the account has no USDC allowance for
+   * the paymaster. Only set on first use of a given account; subsequent runs reuse the persistent
+   * allowance established by that setup op.
+   */
+  setupUserOperationHash?: Hex;
 }

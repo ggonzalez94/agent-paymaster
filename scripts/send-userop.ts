@@ -2,6 +2,17 @@
  * End-to-end test: send a UserOp through the Servo paymaster, paying gas in USDC.
  *
  * Usage: PK=0x... npx tsx scripts/send-userop.ts
+ *
+ * Prerequisites (post-Pimlico migration):
+ *   1. `SMART_ACCOUNT` below must already be deployed on Taiko mainnet.
+ *   2. `SMART_ACCOUNT` must have a persistent USDC allowance granted to the *current*
+ *      `ServoPaymaster` address (not the old `TaikoUsdcPaymaster`). Use
+ *      `scripts/live-paymaster-smoke.ts` once to bootstrap the allowance via an EIP-2612
+ *      permit transaction, then this script can send warm UserOps against the same account.
+ *   3. `SMART_ACCOUNT` must hold enough USDC to cover gas for the op.
+ *
+ * Pimlico's SingletonPaymasterV7 has no permit slot in `paymasterAndData`, so there is no
+ * cold-start path that works in a single UserOp — allowance must exist at `postOp` time.
  */
 import {
   createPublicClient,

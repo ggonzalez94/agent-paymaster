@@ -1,6 +1,6 @@
 import type { Address, Hex } from "viem";
 
-import type { ChainName, PaymasterQuote, PermitContext } from "./types.js";
+import type { ChainName, PaymasterQuote } from "./types.js";
 
 export class ServoError extends Error {
   readonly code: number | undefined;
@@ -39,9 +39,8 @@ export class ServoClient {
     userOp: Record<string, unknown>,
     entryPoint: Address,
     chain?: ChainName | number | string,
-    context?: { permit?: PermitContext },
   ): Promise<PaymasterQuote> {
-    return this.rpc("pm_getPaymasterData", [userOp, entryPoint, chain, context ?? {}]);
+    return this.rpc("pm_getPaymasterData", [userOp, entryPoint, chain]);
   }
 
   async getPaymasterStubData(

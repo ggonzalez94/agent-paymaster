@@ -2,9 +2,11 @@ export { ServoClient, ServoError, type ServoClientConfig } from "./client.js";
 export { createAndExecute, type CreateAndExecuteInput } from "./flow.js";
 export {
   buildPermitTypedData,
+  encodeUsdcPermitCalldata,
   signPermit,
   type SignPermitInput,
   type SignedPermit,
+  type SignedPermitContext,
   type PermitTypedData,
 } from "./permit.js";
 export {
@@ -18,10 +20,4 @@ export {
   type BuildInitCodeInput,
   type GetCounterfactualAddressInput,
 } from "./servo-account.js";
-export type {
-  ChainName,
-  CreateAndExecuteResult,
-  PaymasterQuote,
-  PermitContext,
-  ServoCall,
-} from "./types.js";
+export type { ChainName, CreateAndExecuteResult, PaymasterQuote, ServoCall } from "./types.js";

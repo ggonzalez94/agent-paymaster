@@ -25,9 +25,9 @@ pnpm format:write     # auto-format
 packages/
   api/           → Hono HTTP gateway (quotes, RPC proxy, metrics)  :3000
   bundler/       → ERC-4337 bundler (mempool, auto-submitter, receipts)  :3001
-  shared/        → Types, EIP-712 helpers, paymaster data packing
-  sdk/           → TypeScript SDK (counterfactual account + permit + UserOp helpers)
-  paymaster-contracts/ → Solidity (Foundry): TaikoUsdcPaymaster, ServoAccount, ServoAccountFactory
+  shared/        → Types + Pimlico ERC-20 paymaster encoding/hashing helpers
+  sdk/           → TypeScript SDK (counterfactual account, setup-op bootstrap, UserOp helpers)
+  paymaster-contracts/ → Solidity (Foundry): ServoPaymaster (Pimlico SingletonPaymasterV7) + ServoAccount + ServoAccountFactory
   web/           → Next.js 15 landing page (Tailwind 4)
 ```
 
@@ -36,16 +36,17 @@ packages/
 ## Architecture (How It Works)
 
 1. Agent builds a partial UserOp with USDC but no ETH
-2. `pm_getPaymasterData` via `POST /rpc` → API asks bundler for simulation-backed gas limits (heuristic + EntryPoint `simulateValidation` pre-op gas + `eth_estimateGas` call gas), prices via oracle, returns EIP-712 signed `paymasterAndData`
-3. Agent submits full UserOp via `POST /rpc` (`eth_sendUserOperation`)
-4. Bundler queues the UserOp, the submitter loop simulates it, then submits `handleOps` to EntryPoint (and logs estimate-vs-actual drift when finalized)
-5. Contract validates quote signature in `_validatePaymasterUserOp`
-6. UserOp executes
-7. Contract settles actual USDC cost in `_postOp`, refunds surplus
+2. `pm_getPaymasterData` via `POST /rpc` → API asks bundler for simulation-backed gas limits (heuristic + EntryPoint `simulateValidation` pre-op gas + `eth_estimateGas` call gas), prices via Chainlink oracle, encodes a Pimlico ERC-20 mode paymaster config, and returns the `personal_sign`-signed `paymasterAndData` (the 5% Servo surcharge is baked into the signed `exchangeRate`)
+3. On first use, the SDK sends a one-time bootstrap UserOp that only runs an EIP-2612 `permit(MAX_UINT256)` against USDC — this grants the paymaster unlimited allowance so postOp can pull USDC on every subsequent op
+4. Agent submits the full action UserOp via `POST /rpc` (`eth_sendUserOperation`)
+5. Bundler queues the UserOp, the submitter loop simulates it, then submits `handleOps` to EntryPoint (and logs estimate-vs-actual drift when finalized)
+6. Pimlico's `SingletonPaymasterV7._validateERC20Mode` verifies the signer and returns a postOp context; no funds are pulled in validation (`preFundInToken = 0`)
+7. UserOp executes
+8. `_postOp` pulls the final USDC cost from the sender to the treasury (the paymaster contract itself); the operator sweeps accumulated USDC via `ServoPaymaster.withdrawToken`
 
 Bundler lifecycle notes: pending and finalized UserOps are persisted in SQLite so receipt lookups survive restarts, finalized receipt logs remain available via `eth_getUserOperationReceipt`, failed hash-identical retries are requeued, and finalized retention is capped to keep memory bounded.
 
-**Key design decision**: pricing is off-chain (API signs bounded quotes), validation is on-chain (contract checks signature, never calls external oracles).
+**Key design decision**: pricing is off-chain (API signs bounded quotes), validation is on-chain (contract checks signature, never calls external oracles). The paymaster contract is Pimlico's audited `SingletonPaymasterV7` vendored under `packages/paymaster-contracts/src/pimlico/`, wrapped by a thin `ServoPaymaster.sol` that adds a treasury sweep. Signatures are EIP-191 `personal_sign` over Pimlico's custom UserOp hash (not EIP-712).
 
 ## API Endpoints
 
@@ -65,8 +66,9 @@ Monitoring signals exposed in `/metrics` include submitter ETH balance, mempool 
 
 **Solidity 0.8.24** with Foundry (optimizer 200 runs, via-ir, Cancun EVM).
 
-- `TaikoUsdcPaymaster.sol` — main paymaster: quote validation, permit support, USDC settlement
-- `ServoAccount.sol` — canonical single-owner ERC-4337 account with ERC-1271 permit validation and ERC-721 safe-receive support via OpenZeppelin `ERC721Holder` (required for ERC-8004 registry registration, which mints via `_safeMint`)
+- `ServoPaymaster.sol` — wraps `pimlico/SingletonPaymasterV7.sol` (vendored from pimlicolabs/singleton-paymaster) and adds an admin-gated `withdrawToken` sweep. ERC-20 mode only; off-chain signer sets `treasury = address(this)` so USDC accumulates on the contract.
+- `pimlico/` — vendored Pimlico base contracts (`SingletonPaymasterV7`, `BaseSingletonPaymaster`, `BasePaymaster`, `MultiSigner`, `ManagerAccessControl`, `interfaces/*`). Pragma lowered to `^0.8.24`; `solady` `SafeTransferLib` replaced with OZ `SafeERC20`; v0.6 `UserOperation` overload removed.
+- `ServoAccount.sol` — canonical single-owner ERC-4337 account with `execute`/`executeBatch`, ERC-1271 validation, and ERC-721 safe-receive. The SDK uses `execute(USDC, 0, permit(...))` as the bootstrap UserOp callData.
 - `ServoAccountFactory.sol` — deterministic CREATE2 factory for ServoAccount deployment and address derivation
 - `PaymasterStub.sol` — testing stub (in `test/`)
 - `Permit4337Account.sol` — smoke-test account (in `test/`)
@@ -159,7 +161,7 @@ Railway config: `railway.api.json` and `railway.bundler.json` are the in-repo se
 - **Tests**: co-located with source (`*.test.ts`). Every new module needs tests
 - **Imports**: use workspace aliases (`@agent-paymaster/shared`, etc.)
 - **Logging**: structured JSON with `requestId`, `method`, `path`, `status`, `duration`
-- **Paymaster data**: always use `packPaymasterAndData()` / `normalizePaymasterAndData()` from shared — never hand-encode
+- **Paymaster data**: always use `packPaymasterAndData()` / `normalizePaymasterAndData()` for the outer envelope and `encodeServoErc20PaymasterConfig()` / `computeServoPaymasterSigningHash()` for the inner Pimlico ERC-20 mode bytes — never hand-encode
 
 ## Common Pitfalls
 

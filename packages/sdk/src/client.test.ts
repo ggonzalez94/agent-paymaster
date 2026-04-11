@@ -22,7 +22,7 @@ const makeResponse = (body: unknown, status = 200): Response =>
   });
 
 describe("ServoClient", () => {
-  it("sends pm_getPaymasterData with permit context", async () => {
+  it("sends pm_getPaymasterData without a permit context", async () => {
     const calls: unknown[] = [];
 
     const client = new ServoClient({
@@ -58,30 +58,12 @@ describe("ServoClient", () => {
       SAMPLE_USER_OPERATION,
       ENTRY_POINT,
       "taikoMainnet",
-      {
-        permit: {
-          value: "1000000",
-          deadline: "1900000000",
-          signature:
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1b",
-        },
-      },
     );
 
     expect(result.quoteId).toBe("abc123");
     expect(calls[0]).toMatchObject({
       method: "pm_getPaymasterData",
-      params: [
-        SAMPLE_USER_OPERATION,
-        ENTRY_POINT,
-        "taikoMainnet",
-        {
-          permit: {
-            value: "1000000",
-            deadline: "1900000000",
-          },
-        },
-      ],
+      params: [SAMPLE_USER_OPERATION, ENTRY_POINT, "taikoMainnet"],
     });
   });
 

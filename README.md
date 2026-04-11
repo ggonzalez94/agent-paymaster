@@ -55,9 +55,9 @@ The agent holds USDC but no ETH. The entire gas payment happens in USDC through 
 | -------------------------------------- | ---------------------------------------------------------------------------------- |
 | `@agent-paymaster/api`                 | Hono API — quotes, RPC gateway, rate limiting                                      |
 | `@agent-paymaster/bundler`             | ERC-4337 bundler — simulation-backed gas estimation, mempool, automatic submission |
-| `@agent-paymaster/shared`              | Shared types and EIP-712 helpers                                                   |
-| `@agent-paymaster/sdk`                 | TypeScript SDK for counterfactual account + permit + UserOp flow                   |
-| `@agent-paymaster/paymaster-contracts` | TaikoUsdcPaymaster + ServoAccount + ServoAccountFactory (Solidity / Foundry)       |
+| `@agent-paymaster/shared`              | Shared types + Pimlico ERC-20 paymaster encoding/hashing helpers                   |
+| `@agent-paymaster/sdk`                 | TypeScript SDK for counterfactual account + setup-op bootstrap + UserOp flow       |
+| `@agent-paymaster/paymaster-contracts` | ServoPaymaster (Pimlico SingletonPaymasterV7) + ServoAccount + ServoAccountFactory |
 | `@agent-paymaster/web`                 | Next.js landing page                                                               |
 
 ## Quick start
@@ -99,7 +99,7 @@ POST /rpc
 | Method                        | Description                                                              |
 | ----------------------------- | ------------------------------------------------------------------------ |
 | `pm_getPaymasterStubData`     | Gas estimate + USDC cost quote (stub)                                    |
-| `pm_getPaymasterData`         | Signed paymaster fields (with optional permit)                           |
+| `pm_getPaymasterData`         | Signed Pimlico ERC-20 mode paymaster fields                              |
 | `eth_sendUserOperation`       | Submit UserOp (proxied to bundler)                                       |
 | `eth_getUserOperationReceipt` | Finalized UserOp receipt with top-level `logs` and nested `receipt.logs` |
 | `eth_supportedEntryPoints`    | List supported EntryPoints                                               |
@@ -128,7 +128,7 @@ pnpm --filter @agent-paymaster/paymaster-contracts deploy:factory:taiko-hoodi
 
 Key contracts in `packages/paymaster-contracts/src`:
 
-- `TaikoUsdcPaymaster.sol` — paymaster quote verification and USDC settlement.
+- `ServoPaymaster.sol` — thin wrapper around Pimlico's `SingletonPaymasterV7` (vendored under `src/pimlico/`) that adds an admin-gated `withdrawToken` sweep for the pooled USDC treasury. Servo signs ERC-20 mode quotes off-chain with a `personal_sign`-compatible Pimlico hash; the 5% surcharge is baked into the signed `exchangeRate`.
 - `Permit4337Account.sol` — minimal ERC-4337 account with ERC-1271 permit support (smoke-test helper).
 - `ServoAccount.sol` — canonical Servo single-owner ERC-4337 account with `execute`, `executeBatch`, ERC-1271 validation, and ERC-721 safe-receive support via OpenZeppelin `ERC721Holder`.
 - `ServoAccountFactory.sol` — deterministic CREATE2 factory for ServoAccount deployment and address derivation. New Taiko mainnet deployments should use `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716`.

@@ -1,3 +1,15 @@
+/**
+ * Debug helper: submits `handleOps` directly against EntryPoint, bypassing the Servo bundler.
+ * Useful for reproducing bundler failures by isolating the on-chain execution path.
+ *
+ * Usage: PK=0x... npx tsx scripts/direct-submit.ts
+ *
+ * Prerequisites (post-Pimlico migration):
+ *   1. `SMART_ACCOUNT` must already be deployed and hold a persistent USDC allowance to the
+ *      current `ServoPaymaster` address. Use `scripts/live-paymaster-smoke.ts` once to set up
+ *      the allowance via an EIP-2612 permit tx before running this script.
+ *   2. `PK` must belong to an EOA with ETH on Taiko to pay for the `handleOps` submission.
+ */
 import {
   createPublicClient,
   createWalletClient,

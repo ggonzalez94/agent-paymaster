@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 
 import {
+  computeServoPaymasterSigningHash,
+  encodeServoErc20PaymasterConfig,
   packPaymasterAndData,
-  PAYMASTER_DATA_PARAMETERS,
   SERVO_SUPPORTED_ENTRY_POINTS,
-  SPONSORED_USER_OPERATION_TYPES,
 } from "@agent-paymaster/shared";
-import { concatHex, encodeAbiParameters, keccak256, toHex } from "viem";
+import { concatHex, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import type { BundlerClient } from "./bundler-client.js";
@@ -23,25 +23,8 @@ const WEI_PER_ETH = 10n ** 18n;
 const QUOTE_ID_LENGTH = 24;
 const UINT128_MAX = (1n << 128n) - 1n;
 const UINT48_MAX = (1n << 48n) - 1n;
-const UINT32_MAX = (1n << 32n) - 1n;
-const UINT16_MAX = (1n << 16n) - 1n;
+const BPS_SCALE = 10_000n;
 const RPC_INVALID_PARAMS = -32602;
-
-interface QuoteData {
-  token: `0x${string}`;
-  exchangeRate: bigint;
-  maxTokenCost: bigint;
-  validAfter: number;
-  validUntil: number;
-  postOpOverheadGas: number;
-  surchargeBps: number;
-}
-
-interface PermitData {
-  value: bigint;
-  deadline: bigint;
-  signature: `0x${string}`;
-}
 
 interface PaymasterCapabilityChain {
   name: ChainName;
@@ -53,10 +36,15 @@ interface PaymasterCapabilityToken {
   addresses: Partial<Record<ChainName, string>>;
 }
 
-interface PaymasterPermitRequirements {
+/**
+ * Describes Servo's pre-UserOp allowance requirement for ERC-20 sponsorship: the sender must have the
+ * paymaster approved for at least `maxTokenCost` USDC. The SDK's `flow.ts` bootstraps this via a
+ * permit-only setup UserOp for first-time accounts; subsequent ops rely on the persistent allowance.
+ */
+interface PaymasterAllowanceRequirements {
   standard: "EIP-2612";
-  requiredForSponsoredQuote: true;
-  fields: ["value", "deadline", "signature"];
+  spender: "paymaster";
+  bootstrap: "setup-userop";
 }
 
 export interface GasPriceGuidance {
@@ -76,35 +64,9 @@ export interface PaymasterCapabilities {
   defaultEntryPoint: string | null;
   supportedTokens: [PaymasterCapabilityToken];
   accountFactoryAddress: string | null;
-  permit: PaymasterPermitRequirements;
+  allowance: PaymasterAllowanceRequirements;
   gasPriceGuidance?: GasPriceGuidance;
 }
-
-interface SponsoredUserOperationMessage {
-  sender: `0x${string}`;
-  nonce: bigint;
-  initCodeHash: `0x${string}`;
-  callDataHash: `0x${string}`;
-  accountGasLimits: `0x${string}`;
-  paymasterGasLimits: `0x${string}`;
-  preVerificationGas: bigint;
-  gasFees: `0x${string}`;
-  token: `0x${string}`;
-  exchangeRate: bigint;
-  maxTokenCost: bigint;
-  validAfter: number;
-  validUntil: number;
-  postOpOverheadGas: number;
-  surchargeBps: number;
-  chainId: bigint;
-  paymaster: `0x${string}`;
-}
-
-const EMPTY_PERMIT: PermitData = {
-  value: 0n,
-  deadline: 0n,
-  signature: "0x",
-};
 
 /**
  * 65-byte placeholder signature used for gas estimation when the caller has
@@ -258,18 +220,6 @@ const parseBytes = (value: unknown, fieldName: string): `0x${string}` => {
   }
 
   return value.toLowerCase() as `0x${string}`;
-};
-
-const parseDecimalBigInt = (value: unknown, fieldName: string): bigint => {
-  if (typeof value !== "string" && typeof value !== "number") {
-    throw new Error(`${fieldName} must be a string or number`);
-  }
-
-  try {
-    return BigInt(value);
-  } catch {
-    throw new Error(`${fieldName} must be a valid integer`);
-  }
 };
 
 const toHexQuantity = (value: bigint): `0x${string}` => {
@@ -615,10 +565,10 @@ export class PaymasterService {
         },
       ],
       accountFactoryAddress: this.config.accountFactoryAddress,
-      permit: {
+      allowance: {
         standard: "EIP-2612",
-        requiredForSponsoredQuote: true,
-        fields: ["value", "deadline", "signature"],
+        spender: "paymaster",
+        bootstrap: "setup-userop",
       },
       ...(gasPriceGuidance !== null ? { gasPriceGuidance } : {}),
     };
@@ -637,45 +587,7 @@ export class PaymasterService {
     return normalizedEntryPoint;
   }
 
-  private parsePermitContext(contextMaybe: unknown): PermitData {
-    if (contextMaybe === undefined || contextMaybe === null) {
-      return EMPTY_PERMIT;
-    }
-
-    if (!isObject(contextMaybe)) {
-      throw new PaymasterRpcError(RPC_INVALID_PARAMS, "Invalid permit context", {
-        reason: "permit_invalid",
-        detail: "context must be an object",
-      });
-    }
-
-    if (!Object.hasOwn(contextMaybe, "permit")) {
-      return EMPTY_PERMIT;
-    }
-
-    if (!isObject(contextMaybe.permit)) {
-      throw new PaymasterRpcError(RPC_INVALID_PARAMS, "Invalid permit context", {
-        reason: "permit_invalid",
-        detail: "context.permit must be an object",
-      });
-    }
-
-    const permitCtx = contextMaybe.permit;
-    try {
-      return {
-        value: parseDecimalBigInt(permitCtx.value, "context.permit.value"),
-        deadline: parseDecimalBigInt(permitCtx.deadline, "context.permit.deadline"),
-        signature: parseBytes(permitCtx.signature, "context.permit.signature"),
-      };
-    } catch (error) {
-      throw new PaymasterRpcError(RPC_INVALID_PARAMS, "Invalid permit context", {
-        reason: "permit_invalid",
-        detail: error instanceof Error ? error.message : "permit parsing failed",
-      });
-    }
-  }
-
-  async quote(input: unknown, permit: PermitData = EMPTY_PERMIT): Promise<PaymasterQuote> {
+  async quote(input: unknown): Promise<PaymasterQuote> {
     const parsed = parseQuoteInput(input);
     assertSupportedEntryPoint(parsed.entryPoint, this.config.supportedEntryPoints);
     const tokenAddress = this.config.tokenAddresses[parsed.chain.name];
@@ -723,22 +635,20 @@ export class PaymasterService {
       gas.paymasterPostOpGasLimit;
 
     const estimatedGasWei = totalGasLimit * parsed.maxFeePerGas;
-    const exchangeRate = await this.config.priceProvider.getUsdcPerEthMicros(parsed.chain.name);
-    if (exchangeRate <= 0n) {
+    const marketRate = await this.config.priceProvider.getUsdcPerEthMicros(parsed.chain.name);
+    if (marketRate <= 0n) {
       throw new Error("priceProvider returned a non-positive exchange rate");
     }
 
-    const baseMicros = (estimatedGasWei * exchangeRate) / WEI_PER_ETH;
-    const grossMicros =
-      (baseMicros * BigInt(10_000 + this.config.surchargeBps) + BigInt(10_000 - 1)) /
-      BigInt(10_000);
-    const maxTokenCostMicros = grossMicros > 0n ? grossMicros : 1n;
+    // Pimlico's SingletonPaymasterV7 has no percentage-surcharge field; Servo bakes its margin into
+    // the signed exchangeRate by multiplying the market rate by (1 + surchargeBps/10000). Ceiling
+    // division ensures the paymaster never under-collects.
+    const surchargedRate =
+      (marketRate * (BPS_SCALE + BigInt(this.config.surchargeBps)) + (BPS_SCALE - 1n)) / BPS_SCALE;
+    const exchangeRate = surchargedRate;
 
-    if (permit !== EMPTY_PERMIT && permit.value < maxTokenCostMicros) {
-      throw new Error(
-        "Permit value is less than the required maximum token cost. Use the maxTokenCostMicros from pm_getPaymasterStubData as the permit value.",
-      );
-    }
+    const maxTokenCostMicros = (estimatedGasWei * exchangeRate) / WEI_PER_ETH;
+    const boundedMaxTokenCostMicros = maxTokenCostMicros > 0n ? maxTokenCostMicros : 1n;
 
     const VALID_AFTER_GRACE_SECONDS = 30;
     const nowSeconds = Math.floor(this.nowMs() / 1000);
@@ -751,12 +661,6 @@ export class PaymasterService {
       "verificationGasLimit",
       "callGasLimit",
     );
-    const paymasterGasLimits = packUint128Pair(
-      gas.paymasterVerificationGasLimit,
-      gas.paymasterPostOpGasLimit,
-      "paymasterVerificationGasLimit",
-      "paymasterPostOpGasLimit",
-    );
     const gasFees = packUint128Pair(
       parsed.maxPriorityFeePerGas,
       parsed.maxFeePerGas,
@@ -764,69 +668,57 @@ export class PaymasterService {
       "maxFeePerGas",
     );
 
-    const quoteData: QuoteData = {
-      token: tokenAddress as `0x${string}`,
-      exchangeRate,
-      maxTokenCost: maxTokenCostMicros,
-      validAfter: toBoundedNumber(BigInt(validAfterSeconds), UINT48_MAX, "validAfter"),
+    // Build the inner ERC-20 mode paymasterConfig bytes. The paymaster pools funds on itself, so
+    // treasury = paymasterAddress. paymasterValidationGasLimit matches the packed verification gas
+    // so Pimlico's preOpGas approximation (used for its penalty calc) is accurate.
+    const erc20ConfigBytes = encodeServoErc20PaymasterConfig({
       validUntil: toBoundedNumber(BigInt(validUntilSeconds), UINT48_MAX, "validUntil"),
-      postOpOverheadGas: toBoundedNumber(
-        gas.paymasterPostOpGasLimit,
-        UINT32_MAX,
-        "postOpOverheadGas",
-      ),
-      surchargeBps: toBoundedNumber(BigInt(this.config.surchargeBps), UINT16_MAX, "surchargeBps"),
-    };
-
-    const message: SponsoredUserOperationMessage = {
-      sender: parsed.sender as `0x${string}`,
-      nonce: parsed.userOperationNonce,
-      initCodeHash: keccak256(parsed.initCode),
-      callDataHash: keccak256(parsed.callData),
-      accountGasLimits,
-      paymasterGasLimits,
-      preVerificationGas: gas.preVerificationGas,
-      gasFees,
-      token: quoteData.token,
-      exchangeRate: quoteData.exchangeRate,
-      maxTokenCost: quoteData.maxTokenCost,
-      validAfter: quoteData.validAfter,
-      validUntil: quoteData.validUntil,
-      postOpOverheadGas: quoteData.postOpOverheadGas,
-      surchargeBps: quoteData.surchargeBps,
-      chainId: BigInt(parsed.chain.chainId),
-      paymaster: this.config.paymasterAddress as `0x${string}`,
-    };
-
-    const quoteSignature = await this.quoteSigner.signTypedData({
-      domain: {
-        name: "TaikoUsdcPaymaster",
-        version: "3",
-        chainId: BigInt(parsed.chain.chainId),
-        verifyingContract: this.config.paymasterAddress as `0x${string}`,
-      },
-      types: SPONSORED_USER_OPERATION_TYPES,
-      primaryType: "SponsoredUserOperation",
-      message,
+      validAfter: toBoundedNumber(BigInt(validAfterSeconds), UINT48_MAX, "validAfter"),
+      token: tokenAddress as `0x${string}`,
+      postOpGas: gas.paymasterPostOpGasLimit,
+      exchangeRate,
+      paymasterValidationGasLimit: gas.paymasterVerificationGasLimit,
+      treasury: this.config.paymasterAddress as `0x${string}`,
     });
 
-    const paymasterData = encodeAbiParameters(PAYMASTER_DATA_PARAMETERS, [
-      quoteData,
-      quoteSignature,
-      permit,
-    ]) as `0x${string}`;
+    // The "paymasterAndData-without-signature" buffer that Pimlico hashes over. 170 bytes: 52 bytes
+    // of outer envelope (paymaster + vGas + pmPostOpGas) + 118 bytes of inner config.
+    const paymasterAndDataNoSig = packPaymasterAndData({
+      paymaster: this.config.paymasterAddress as `0x${string}`,
+      paymasterVerificationGasLimit: gas.paymasterVerificationGasLimit,
+      paymasterPostOpGasLimit: gas.paymasterPostOpGasLimit,
+      paymasterData: erc20ConfigBytes,
+    });
+
+    const signingHash = computeServoPaymasterSigningHash({
+      userOp: {
+        sender: parsed.sender as `0x${string}`,
+        nonce: parsed.userOperationNonce,
+        initCode: parsed.initCode,
+        callData: parsed.callData,
+        accountGasLimits,
+        preVerificationGas: gas.preVerificationGas,
+        gasFees,
+      },
+      paymasterAndDataNoSig,
+      chainId: parsed.chain.chainId,
+    });
+
+    // personal_sign (EIP-191) — MessageHashUtils.toEthSignedMessageHash on-chain matches
+    // signMessage({ raw: hash }) off-chain.
+    const quoteSignature = (await this.quoteSigner.signMessage({
+      message: { raw: signingHash },
+    })) as `0x${string}`;
+
+    // Final paymasterData = inner ERC-20 config + signature. The outer envelope is already part of
+    // paymasterAndDataNoSig; append the signature to form the full paymasterAndData.
+    const paymasterData = concatHex([erc20ConfigBytes, quoteSignature]) as `0x${string}`;
+    const paymasterAndData = concatHex([paymasterAndDataNoSig, quoteSignature]) as `0x${string}`;
 
     const quoteId = createHash("sha256")
       .update(paymasterData.slice(2))
       .digest("hex")
       .slice(0, QUOTE_ID_LENGTH);
-
-    const paymasterAndData = packPaymasterAndData({
-      paymaster: this.config.paymasterAddress as `0x${string}`,
-      paymasterVerificationGasLimit: gas.paymasterVerificationGasLimit,
-      paymasterPostOpGasLimit: gas.paymasterPostOpGasLimit,
-      paymasterData,
-    });
 
     const gasPriceGuidance = this.config.gasPriceOracle
       ? await this.config.gasPriceOracle.getGasPriceGuidance().catch(() => null)
@@ -847,8 +739,8 @@ export class PaymasterService {
       paymasterPostOpGasLimit: toHexQuantity(gas.paymasterPostOpGasLimit),
       estimatedGasLimit: toHexQuantity(totalGasLimit),
       estimatedGasWei: toHexQuantity(estimatedGasWei),
-      maxTokenCostMicros: maxTokenCostMicros.toString(),
-      maxTokenCost: formatUsdcMicros(maxTokenCostMicros),
+      maxTokenCostMicros: boundedMaxTokenCostMicros.toString(),
+      maxTokenCost: formatUsdcMicros(boundedMaxTokenCostMicros),
       validUntil: validUntilSeconds,
       entryPoint: parsed.entryPoint,
       sender: parsed.sender,
@@ -881,21 +773,15 @@ export class PaymasterService {
       );
     }
 
-    const [userOperation, entryPoint, chainMaybe, contextMaybe] = params;
+    const [userOperation, entryPoint, chainMaybe] = params;
 
-    const permit =
-      method === "pm_getPaymasterData" ? this.parsePermitContext(contextMaybe) : EMPTY_PERMIT;
-
-    const quote = await this.quote(
-      {
-        userOperation,
-        sender: isObject(userOperation) ? userOperation.sender : undefined,
-        entryPoint,
-        chain: chainMaybe,
-        token: "USDC",
-      },
-      permit,
-    );
+    const quote = await this.quote({
+      userOperation,
+      sender: isObject(userOperation) ? userOperation.sender : undefined,
+      entryPoint,
+      chain: chainMaybe,
+      token: "USDC",
+    });
 
     return {
       paymaster: quote.paymaster,

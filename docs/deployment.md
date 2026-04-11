@@ -4,23 +4,26 @@
 
 ## Contracts
 
-| Contract                | Address                                      | Purpose                                                                                                                                                                                    |
-| ----------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **EntryPoint v0.7**     | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Canonical ERC-4337 singleton (same address on every EVM chain). Routes all UserOps: deploys accounts via initCode, validates signatures, calls paymaster, settles gas.                     |
-| **TaikoUsdcPaymaster**  | `0xca675148201e29b13a848ce30c3074c8de995891` | Validates off-chain EIP-712 signed gas quotes, executes USDC permits, locks `maxTokenCost` USDC during validation, settles actual cost in `_postOp`, refunds surplus to the agent.         |
-| **ServoAccountFactory** | `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716` | Deterministic CREATE2 factory for agent wallets. Deploys the current ServoAccount implementation with ERC-1271 validation and ERC-721 safe-receive support for registry `_safeMint` flows. |
-| **USDC**                | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b` | Circle's bridged USDC on Taiko. 6 decimals. Supports both ERC-2612 permit variants (v/r/s and bytes signature).                                                                            |
+| Contract                | Address                                      | Purpose                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **EntryPoint v0.7**     | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | Canonical ERC-4337 singleton (same address on every EVM chain). Routes all UserOps: deploys accounts via initCode, validates signatures, calls paymaster, settles gas.                                                                                                                                                                 |
+| **ServoPaymaster**      | _pending redeploy_                           | Thin wrapper over Pimlico's audited `SingletonPaymasterV7`. Validates off-chain `personal_sign`-signed ERC-20 mode quotes; pulls the actual USDC cost in `_postOp`; admin sweeps pooled USDC via `withdrawToken`. The previous `TaikoUsdcPaymaster` at `0xca675148201e29b13a848ce30c3074c8de995891` is being replaced by this wrapper. |
+| **ServoAccountFactory** | `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716` | Deterministic CREATE2 factory for agent wallets. Deploys the current ServoAccount implementation with ERC-1271 validation and ERC-721 safe-receive support for registry `_safeMint` flows.                                                                                                                                             |
+| **USDC**                | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b` | Circle's bridged USDC on Taiko. 6 decimals. Supports both ERC-2612 permit variants (v/r/s and bytes signature).                                                                                                                                                                                                                        |
 
 ### Paymaster configuration
 
-| Parameter                 | Value       | Description                                                                                        |
-| ------------------------- | ----------- | -------------------------------------------------------------------------------------------------- |
-| `maxVerificationGasLimit` | 1,000,000   | Maximum verification gas accepted per UserOp. Must exceed factory CREATE2 deployment cost (~620k). |
-| `maxPostOpOverheadGas`    | 100,000     | Maximum `postOpOverheadGas` in signed quotes.                                                      |
-| `maxNativeCostWei`        | 0.1 ETH     | Maximum native gas cost per UserOp. Rejects ops that would cost more.                              |
-| `maxQuoteTtlSeconds`      | 150         | Maximum quote validity window. Quotes beyond this are rejected on-chain.                           |
-| `maxSurchargeBps`         | 1,000 (10%) | Maximum surcharge in signed quotes.                                                                |
-| `lockedUsdcPrefund`       | 0           | USDC currently locked for in-flight UserOps.                                                       |
+`ServoPaymaster` has no on-chain guardrails: it trusts the off-chain quote signer to bound every
+field before signing. Servo's off-chain quote generator applies the 5% surcharge (baked into the
+signed `exchangeRate`), sets `validUntil = now + PAYMASTER_QUOTE_TTL_SECONDS` (default 90s), and
+uses the bundler's simulation-backed gas estimate for `postOpGas` and `paymasterValidationGasLimit`.
+
+Admin / manager roles:
+
+| Role                 | Function                                                                        |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `DEFAULT_ADMIN_ROLE` | Adds/removes signers, rotates managers, sweeps USDC via `withdrawToken`.        |
+| `MANAGER_ROLE`       | Adds/removes signers, updates bundler allowlist, stakes/unstakes on EntryPoint. |
 
 ### EntryPoint deposit
 
