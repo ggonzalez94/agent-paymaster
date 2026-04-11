@@ -26,9 +26,9 @@
 
 ```mermaid
 flowchart LR
-  A[Agent Wallet / SDK] --> B[AA API Gateway\nHono + TypeScript]
+  A[Agent Wallet / viem Client] --> B[AA API Gateway\nHono + TypeScript]
   B --> C[Bundler Service\nAlto Fork]
-  B --> D[Quote Service\nEIP-712 Signer]
+  B --> D[Quote Service\npersonal_sign Signer]
   C --> E[Taiko Debug RPC\nself-hosted taiko-geth]
   C --> F[EntryPoint v0.8/v0.7]
   F --> G[USDC Verifying Paymaster]
@@ -63,11 +63,8 @@ Responsibilities:
 
 Key routes (MVP):
 
-- `POST /v1/paymaster/quote`
-  - Input: sender, chainId, entryPoint, gas fee params, token (`USDC`), permit payload.
-  - Output: fully packed on-chain `paymasterAndData`, raw `paymasterData`, and the exact gas limits the signed quote is bound to (`callGasLimit`, `verificationGasLimit`, `preVerificationGas`, `paymasterVerificationGasLimit`, `paymasterPostOpGasLimit`, `validUntil`, `quoteId`).
 - `POST /rpc`
-  - Proxy for `eth_sendUserOperation`, `eth_estimateUserOperationGas`, `eth_getUserOperationReceipt`, `eth_supportedEntryPoints`.
+  - JSON-RPC gateway for `pm_getPaymasterStubData`, `pm_getPaymasterData`, `eth_sendUserOperation`, `eth_estimateUserOperationGas`, `eth_getUserOperationReceipt`, and `eth_supportedEntryPoints`.
 - `GET /health`
   - Aggregated health of API, DB, bundler, and debug RPC availability.
 
@@ -92,8 +89,9 @@ Responsibilities:
 
 - Compute max USDC charge from gas bounds and signed pricing policy.
 - Read ETH/USD and USDC/USD off-chain from Chainlink mainnet, with Coinbase and Kraken fallback quorum checks.
-- Sign quote payload (EIP-712) consumed by paymaster validation.
-- Enforce quote expiry, nonce uniqueness, and risk margins.
+- Sign quote payload as an EIP-191 `personal_sign` over Pimlico's custom UserOp hash (see `SingletonPaymasterV7._getHash`).
+- Bake the Servo surcharge (default 5%) into the signed `exchangeRate` rather than carrying a separate BPS field.
+- Enforce quote expiry via `validUntil` / `validAfter` and gas-cost bounds off-chain before signing.
 
 Inputs:
 
@@ -114,25 +112,25 @@ Responsibilities:
 
 ## 7) UserOperation Lifecycle (Data Flow)
 
-1. Agent builds a partial `UserOperation`.
-2. Agent calls `POST /v1/paymaster/quote` to get signed paymaster fields.
-3. API returns paymaster payload plus gas limits and validity window.
-4. Agent (or API) submits full UserOp via `eth_sendUserOperation` to bundler.
-5. Bundler simulates UserOp using debug trace against Taiko state.
-6. Bundler bundles and submits `handleOps` transaction.
-7. EntryPoint calls paymaster validation.
-8. UserOp executes.
-9. EntryPoint calls paymaster `postOp` for final USDC settlement/refund.
+1. Agent builds a partial `UserOperation`, including `initCode` if the account is still counterfactual.
+2. Agent calls `pm_getPaymasterStubData` to learn gas bounds, the paymaster address, the token address, and `maxTokenCost`.
+3. If the account lacks allowance, the client signs an EIP-2612 permit and prepends it to the account `callData` in the same UserOperation.
+4. Agent calls `pm_getPaymasterData` for the exact final `UserOperation`.
+5. API returns the fully packed paymaster payload plus gas limits and validity window.
+6. Agent signs and submits the full UserOp via `eth_sendUserOperation` to the bundler.
+7. Bundler simulates the final UserOp using debug trace against Taiko state.
+8. Bundler bundles and submits `handleOps`.
+9. EntryPoint calls paymaster validation, the account executes, and `postOp` settles the final USDC charge.
 10. Indexer records `UserOperationSponsored` and lifecycle status.
 
 ## 8) Smart Contract Architecture
 
 ## 8.1 Contracts
 
-- `TaikoUsdcPaymaster` (main contract)
-  - Inherits `BasePaymaster` (ERC-4337 compatible base).
-  - Supports packed `paymasterData` with permit and quote signature fields.
-  - Emits sponsorship accounting events.
+- `ServoPaymaster` (main contract)
+  - Inherits Pimlico's `SingletonPaymasterV7` (vendored from `pimlicolabs/singleton-paymaster` under `packages/paymaster-contracts/src/pimlico/`) and adds an admin-gated `withdrawToken` sweep for the pooled treasury.
+  - ERC-20 mode only in practice; Servo pools USDC on the contract itself (`treasury = address(this)`).
+  - Emits Pimlico's `UserOperationSponsored` event on every charged UserOp.
 - `ServoAccount` (canonical agent account)
   - Single-owner ERC-4337 account used by ServoAccountFactory.
   - Supports ERC-1271 permit validation and ERC-721 safe receipt via OpenZeppelin `ERC721Holder`, so registries that mint with `_safeMint` can mint directly to the account.
@@ -141,17 +139,24 @@ Responsibilities:
 - `PriceSafetyConfig` (optional module)
   - Stores protocol-level guardrails (max surcharge, max quote TTL, max gas limits).
 
-## 8.2 Paymaster Data Layout (MVP)
+## 8.2 Paymaster Data Layout (Pimlico ERC-20 Mode)
 
-Packed fields:
+`paymasterAndData` = outer envelope || inner config || signature. Exact byte offsets are parsed by
+`BaseSingletonPaymaster._parseErc20Config`:
 
-- mode/version byte
-- token address (`USDC`)
-- max token charge
-- quote expiry
-- quote nonce
-- quote signature
-- optional permit payload/signature
+- paymaster address (20 bytes)
+- paymasterVerificationGasLimit (16 bytes)
+- paymasterPostOpGasLimit (16 bytes)
+- mode + allowAllBundlers byte (1 byte): `(mode << 1) | allowAllBundlers` — Servo sends `0x03`
+- flags byte (1 byte): bit 0 = constantFeePresent, bit 1 = recipientPresent, bit 2 = preFundPresent — Servo sends `0x00`
+- validUntil (6 bytes)
+- validAfter (6 bytes)
+- token (20 bytes) = USDC
+- postOpGas (16 bytes) — Pimlico penalty calculation input
+- exchangeRate (32 bytes) = tokens per 1 ETH (1e18 wei) in token base units, with the 5% Servo surcharge already baked in
+- paymasterValidationGasLimit (16 bytes)
+- treasury (20 bytes) = the `ServoPaymaster` contract itself
+- signature (64 or 65 bytes): `personal_sign(keccak256(abi.encode(userOpHashCustom, chainId)))` from the `PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY` account
 
 ## 8.3 Validation Path
 
@@ -168,7 +173,7 @@ Returns context for `postOp` settlement.
 ## 8.4 Settlement Path (`postOp`)
 
 - Compute actual token charge from actual gas cost + signed surcharge and signed exchange rate.
-- Pull USDC via permit/allowance path.
+- Pull USDC in `postOp` after the account's batched permit/allowance path has already executed.
 - Refund excess if prefund > actual.
 - Emit accounting event with effective price/cost values.
 
@@ -199,9 +204,7 @@ Compatibility goals:
 
 ## 9.2 REST (control plane)
 
-- `POST /v1/paymaster/quote`
-- `GET /v1/paymaster/config`
-- `GET /v1/paymaster/chains`
+- `GET /capabilities`
 - `GET /v1/ops/:userOpHash`
 
 All REST responses include deterministic error codes for client retry behavior.
@@ -276,4 +279,4 @@ All REST responses include deterministic error codes for client retry behavior.
 - Final canonical EntryPoint set for Taiko production deployment (v0.8 only or dual v0.7/v0.8).
 - Preferred USDC token contract addresses per environment.
 - Surcharge model for MVP (`0%` vs configurable flat percentage).
-- Whether permit signature is mandatory in MVP or allowance fallback is acceptable.
+- Whether to expose the paymaster address directly in capabilities, even though `pm_getPaymasterStubData` already reveals the spender for no-SDK clients.

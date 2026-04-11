@@ -2,20 +2,19 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  computeServoPaymasterSigningHash,
+  encodeServoErc20PaymasterConfig,
   packPaymasterAndData,
-  PAYMASTER_DATA_PARAMETERS,
-  SPONSORED_USER_OPERATION_TYPES,
 } from "@agent-paymaster/shared";
 import {
   concatHex,
   createPublicClient,
   createWalletClient,
-  encodeAbiParameters,
   encodeFunctionData,
   formatUnits,
   getAddress,
   http,
-  keccak256,
+  maxUint256,
   parseAbi,
   toHex,
   type Abi,
@@ -36,11 +35,16 @@ const ENTRY_POINT_ABI = parseAbi([
 
 const ERC20_ABI = parseAbi([
   "function balanceOf(address owner) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
   "function nonces(address owner) view returns (uint256)",
   "function transfer(address to, uint256 value) returns (bool)",
 ]);
 
-const ZERO_SIGNATURE = `0x${"00".repeat(65)}` as Hex;
+const USDC_PERMIT_ABI = parseAbi([
+  "function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)",
+]);
+
+const DUMMY_SIGNATURE = `0x${"ff".repeat(32)}${"aa".repeat(32)}1c` as Hex; // non-zero 65-byte placeholder for hash computation
 const WEI_PER_ETH = 1_000_000_000_000_000_000n;
 const BASIS_POINTS_SCALE = 10_000n;
 
@@ -60,6 +64,15 @@ const packUint128Pair = (first: bigint, second: bigint): Hex =>
   concatHex([toUint128Hex(first), toUint128Hex(second)]) as Hex;
 
 const formatUsdcMicros = (value: bigint): string => formatUnits(value, 6);
+
+const splitSig = (sig: Hex): { v: number; r: Hex; s: Hex } => {
+  const bytes = sig.slice(2);
+  return {
+    r: `0x${bytes.slice(0, 64)}` as Hex,
+    s: `0x${bytes.slice(64, 128)}` as Hex,
+    v: Number.parseInt(bytes.slice(128, 130), 16),
+  };
+};
 
 const artifactPath = resolve(
   process.cwd(),
@@ -85,9 +98,7 @@ const entryPointAddress = getAddress(
 const usdcAddress = getAddress(
   process.env.USDC_ADDRESS ?? "0x07d83526730c7438048D55A4fc0b850e2aaB6f0b",
 );
-const paymasterAddress = getAddress(
-  process.env.PAYMASTER_ADDRESS ?? "0xCa675148201E29b13A848cE30c3074c8dE995891",
-);
+const paymasterAddress = getAddress(requireEnv("PAYMASTER_ADDRESS"));
 const quoteTtlSeconds = Number(process.env.PAYMASTER_QUOTE_TTL_SECONDS ?? "90");
 const surchargeBps = BigInt(process.env.PAYMASTER_SURCHARGE_BPS ?? "500");
 const smokePriceOverride = process.env.SMOKE_USDC_PER_ETH_MICROS;
@@ -128,7 +139,7 @@ const resolveUsdcPerEthMicros = async (): Promise<bigint> => {
 };
 
 const main = async () => {
-  console.log("Smoke test configuration");
+  console.log("Smoke test configuration (ServoPaymaster / Pimlico ERC-20 mode)");
   console.log(`  deployer: ${deployerAccount.address}`);
   console.log(`  owner: ${ownerAccount.address}`);
   console.log(`  quote signer: ${quoteSignerAccount.address}`);
@@ -136,9 +147,15 @@ const main = async () => {
   console.log(`  paymaster: ${paymasterAddress}`);
   console.log(`  usdc: ${usdcAddress}`);
 
-  const usdcPerEthMicros = await resolveUsdcPerEthMicros();
-  console.log(`  oracle price: ${formatUsdcMicros(usdcPerEthMicros)} USDC/ETH`);
+  const marketRate = await resolveUsdcPerEthMicros();
+  console.log(`  oracle price: ${formatUsdcMicros(marketRate)} USDC/ETH`);
 
+  // Bake the Servo surcharge into the signed exchangeRate (Pimlico has no surcharge slot).
+  const surchargedRate =
+    (marketRate * (BASIS_POINTS_SCALE + surchargeBps) + (BASIS_POINTS_SCALE - 1n)) /
+    BASIS_POINTS_SCALE;
+
+  // Deploy a fresh test account.
   const deployHash = await walletClient.deployContract({
     abi: accountAbi,
     bytecode: accountBytecode,
@@ -153,6 +170,7 @@ const main = async () => {
 
   console.log(`Deployed Permit4337Account at ${accountAddress}`);
 
+  // Gas envelope for the ping UserOp.
   const gasPrice = await publicClient.getGasPrice();
   const callGasLimit = 80_000n;
   const verificationGasLimit = 150_000n;
@@ -167,19 +185,7 @@ const main = async () => {
     functionName: "ping",
   });
 
-  const userOperation = {
-    sender: accountAddress,
-    nonce: "0x0",
-    initCode: "0x",
-    callData,
-    callGasLimit: toHexQuantity(callGasLimit),
-    verificationGasLimit: toHexQuantity(verificationGasLimit),
-    preVerificationGas: toHexQuantity(preVerificationGas),
-    maxFeePerGas: toHexQuantity(maxFeePerGas),
-    maxPriorityFeePerGas: toHexQuantity(maxPriorityFeePerGas),
-    signature: ZERO_SIGNATURE,
-  };
-
+  // Cost bounds used for quoting + funding.
   const totalGasLimit =
     callGasLimit +
     verificationGasLimit +
@@ -187,69 +193,17 @@ const main = async () => {
     paymasterVerificationGasLimit +
     paymasterPostOpGasLimit;
   const estimatedGasWei = totalGasLimit * maxFeePerGas;
-  const baseMicros = (estimatedGasWei * usdcPerEthMicros) / WEI_PER_ETH;
-  const maxTokenCostMicros =
-    (baseMicros * (BASIS_POINTS_SCALE + surchargeBps) + (BASIS_POINTS_SCALE - 1n)) /
-    BASIS_POINTS_SCALE;
-  const validAfter = BigInt(Math.floor(Date.now() / 1000));
-  const validUntil = validAfter + BigInt(quoteTtlSeconds);
-  const accountGasLimits = packUint128Pair(verificationGasLimit, callGasLimit);
-  const paymasterGasLimits = packUint128Pair(
-    paymasterVerificationGasLimit,
-    paymasterPostOpGasLimit,
-  );
-  const gasFees = packUint128Pair(maxPriorityFeePerGas, maxFeePerGas);
-
-  const quoteMessage = {
-    sender: accountAddress,
-    nonce: 0n,
-    initCodeHash: keccak256("0x"),
-    callDataHash: keccak256(callData),
-    accountGasLimits,
-    paymasterGasLimits,
-    preVerificationGas,
-    gasFees,
-    token: usdcAddress,
-    exchangeRate: usdcPerEthMicros,
-    maxTokenCost: maxTokenCostMicros,
-    validAfter: Number(validAfter),
-    validUntil: Number(validUntil),
-    postOpOverheadGas: Number(paymasterPostOpGasLimit),
-    surchargeBps: Number(surchargeBps),
-    chainId: 167000n,
-    paymaster: paymasterAddress,
-  } as const;
-
-  const quoteSignature = await quoteSignerAccount.signTypedData({
-    domain: {
-      name: "TaikoUsdcPaymaster",
-      version: "3",
-      chainId: 167000,
-      verifyingContract: paymasterAddress,
-    },
-    types: SPONSORED_USER_OPERATION_TYPES,
-    primaryType: "SponsoredUserOperation",
-    message: quoteMessage,
-  });
-
-  const quoteDataForEncoding = {
-    token: usdcAddress,
-    exchangeRate: usdcPerEthMicros,
-    maxTokenCost: maxTokenCostMicros,
-    validAfter: Number(validAfter),
-    validUntil: Number(validUntil),
-    postOpOverheadGas: Number(paymasterPostOpGasLimit),
-    surchargeBps: Number(surchargeBps),
-  };
-
+  const maxTokenCostMicros = (estimatedGasWei * surchargedRate) / WEI_PER_ETH;
   const maxTokenCost = formatUsdcMicros(maxTokenCostMicros);
+  console.log(`  max token cost: ${maxTokenCost} USDC`);
 
-  const deployerUsdcBalance = await publicClient.readContract({
+  // Snapshot balances.
+  const deployerUsdcBalance = (await publicClient.readContract({
     address: usdcAddress,
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: [deployerAccount.address],
-  });
+  })) as bigint;
 
   if (deployerUsdcBalance < maxTokenCostMicros) {
     throw new Error(
@@ -257,20 +211,15 @@ const main = async () => {
     );
   }
 
-  const paymasterUsdcBefore = await publicClient.readContract({
+  const paymasterUsdcBefore = (await publicClient.readContract({
     address: usdcAddress,
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: [paymasterAddress],
-  });
-  const accountUsdcBefore = await publicClient.readContract({
-    address: usdcAddress,
-    abi: ERC20_ABI,
-    functionName: "balanceOf",
-    args: [accountAddress],
-  });
+  })) as bigint;
   const accountEthBefore = await publicClient.getBalance({ address: accountAddress });
 
+  // Fund the account with USDC so the paymaster has something to pull.
   const fundHash = await walletClient.writeContract({
     address: usdcAddress,
     abi: ERC20_ABI,
@@ -279,15 +228,19 @@ const main = async () => {
   });
   await publicClient.waitForTransactionReceipt({ hash: fundHash });
 
-  const permitNonce = await publicClient.readContract({
+  // Sign a USDC permit for MAX_UINT256 so the paymaster can pull from the account. Anyone can
+  // broadcast `USDC.permit(owner, spender, value, deadline, v, r, s)` — EIP-2612 only requires
+  // the owner's signature — so the deployer submits it as a regular tx. Once the allowance is
+  // set, the actual sponsored UserOp needs zero permit machinery.
+  const permitNonce = (await publicClient.readContract({
     address: usdcAddress,
     abi: ERC20_ABI,
     functionName: "nonces",
     args: [accountAddress],
-  });
+  })) as bigint;
   const permitDeadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
 
-  const permitSig = await ownerAccount.signTypedData({
+  const permitSig = (await ownerAccount.signTypedData({
     domain: {
       name: "USD Coin",
       version: "2",
@@ -307,24 +260,78 @@ const main = async () => {
     message: {
       owner: accountAddress,
       spender: paymasterAddress,
-      value: maxTokenCostMicros,
+      value: maxUint256,
       nonce: permitNonce,
       deadline: permitDeadline,
     },
+  })) as Hex;
+  const { v, r, s } = splitSig(permitSig);
+
+  const permitTxHash = await walletClient.writeContract({
+    address: usdcAddress,
+    abi: USDC_PERMIT_ABI,
+    functionName: "permit",
+    args: [accountAddress, paymasterAddress, maxUint256, permitDeadline, v, r, s],
+  });
+  await publicClient.waitForTransactionReceipt({ hash: permitTxHash });
+
+  const allowance = (await publicClient.readContract({
+    address: usdcAddress,
+    abi: ERC20_ABI,
+    functionName: "allowance",
+    args: [accountAddress, paymasterAddress],
+  })) as bigint;
+  if (allowance !== maxUint256) {
+    throw new Error(`expected unlimited allowance after permit, got ${allowance}`);
+  }
+
+  // Build the Pimlico ERC-20 mode paymasterConfig bytes.
+  const validAfter = Math.floor(Date.now() / 1000) - 30; // small grace window
+  const validUntil = validAfter + quoteTtlSeconds;
+
+  const erc20ConfigBytes = encodeServoErc20PaymasterConfig({
+    validUntil,
+    validAfter,
+    token: usdcAddress,
+    postOpGas: paymasterPostOpGasLimit,
+    exchangeRate: surchargedRate,
+    paymasterValidationGasLimit: paymasterVerificationGasLimit,
+    treasury: paymasterAddress,
   });
 
-  const paymasterData = encodeAbiParameters(PAYMASTER_DATA_PARAMETERS, [
-    quoteDataForEncoding,
-    quoteSignature,
-    { value: maxTokenCostMicros, deadline: permitDeadline, signature: permitSig },
-  ]) as Hex;
-  const packedPaymasterAndData = packPaymasterAndData({
+  // Outer envelope (paymaster + vGas + postOpGas) + inner config + placeholder signature, used
+  // to compute the digest the quote signer must personal_sign.
+  const paymasterAndDataNoSig = packPaymasterAndData({
     paymaster: paymasterAddress,
     paymasterVerificationGasLimit,
     paymasterPostOpGasLimit,
-    paymasterData,
-  }) as Hex;
+    paymasterData: erc20ConfigBytes,
+  });
 
+  const accountGasLimits = packUint128Pair(verificationGasLimit, callGasLimit);
+  const gasFees = packUint128Pair(maxPriorityFeePerGas, maxFeePerGas);
+
+  const signingHash = computeServoPaymasterSigningHash({
+    userOp: {
+      sender: accountAddress,
+      nonce: 0n,
+      initCode: "0x",
+      callData,
+      accountGasLimits,
+      preVerificationGas,
+      gasFees,
+    },
+    paymasterAndDataNoSig,
+    chainId: 167000,
+  });
+
+  const quoteSignature = (await quoteSignerAccount.signMessage({
+    message: { raw: signingHash },
+  })) as Hex;
+
+  const paymasterAndData = concatHex([paymasterAndDataNoSig, quoteSignature]) as Hex;
+
+  // Build the final UserOp and get its canonical hash from EntryPoint.
   const packedForHash = {
     sender: accountAddress,
     nonce: 0n,
@@ -333,8 +340,8 @@ const main = async () => {
     accountGasLimits,
     preVerificationGas,
     gasFees,
-    paymasterAndData: packedPaymasterAndData,
-    signature: ZERO_SIGNATURE,
+    paymasterAndData,
+    signature: DUMMY_SIGNATURE,
   };
 
   const userOpHash = await publicClient.readContract({
@@ -345,9 +352,7 @@ const main = async () => {
   });
 
   const userOpSignature = await ownerAccount.signMessage({
-    message: {
-      raw: userOpHash,
-    },
+    message: { raw: userOpHash },
   });
 
   const finalUserOperation = {
@@ -366,28 +371,29 @@ const main = async () => {
   const handleOpsHash = await walletClient.writeContract(simulation.request);
   const handleOpsReceipt = await publicClient.waitForTransactionReceipt({ hash: handleOpsHash });
 
-  const pingCount = await publicClient.readContract({
+  const pingCount = (await publicClient.readContract({
     address: accountAddress,
     abi: accountAbi,
     functionName: "pingCount",
-  });
-  const paymasterUsdcAfter = await publicClient.readContract({
+  })) as bigint;
+  const paymasterUsdcAfter = (await publicClient.readContract({
     address: usdcAddress,
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: [paymasterAddress],
-  });
-  const accountUsdcAfter = await publicClient.readContract({
+  })) as bigint;
+  const accountUsdcAfter = (await publicClient.readContract({
     address: usdcAddress,
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: [accountAddress],
-  });
+  })) as bigint;
   const accountEthAfter = await publicClient.getBalance({ address: accountAddress });
 
   console.log("Smoke test result");
   console.log(`  deployment tx: ${deployHash}`);
   console.log(`  funding tx: ${fundHash}`);
+  console.log(`  permit tx: ${permitTxHash}`);
   console.log(`  handleOps tx: ${handleOpsHash}`);
   console.log(`  handleOps status: ${handleOpsReceipt.status}`);
   console.log(`  pingCount: ${pingCount}`);
@@ -395,9 +401,7 @@ const main = async () => {
   console.log(
     `  paymaster USDC delta: ${formatUsdcMicros(paymasterUsdcAfter - paymasterUsdcBefore)} USDC`,
   );
-  console.log(
-    `  account USDC delta: ${formatUsdcMicros(accountUsdcAfter - accountUsdcBefore)} USDC`,
-  );
+  console.log(`  account USDC after: ${formatUsdcMicros(accountUsdcAfter)} USDC`);
   console.log(`  account ETH before: ${formatUnits(accountEthBefore, 18)} ETH`);
   console.log(`  account ETH after: ${formatUnits(accountEthAfter, 18)} ETH`);
 

@@ -20,5 +20,8 @@
     "dev": "tsup src/index.ts --watch --format esm --dts",
     "lint": "eslint src --ext .ts",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "viem": "^2.38.0"
   }
 }

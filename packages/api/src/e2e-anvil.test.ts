@@ -1,15 +1,20 @@
 /**
  * E2E cold-start test on local Anvil.
  *
- * Deploys EntryPoint + MockUSDC + TaikoUsdcPaymaster + ServoAccountFactory,
- * creates an in-process API + Bundler, and verifies the complete zero-ETH flow:
- * derive counterfactual -> fund USDC -> stub quote -> sign permit ->
- * full quote -> sign UserOp -> submit handleOps -> verify on-chain state.
+ * Deploys EntryPoint + MockUSDC + ServoPaymaster (Pimlico SingletonPaymasterV7 wrapper) +
+ * ServoAccountFactory, creates an in-process API + Bundler, and verifies the complete zero-ETH
+ * flow for a fresh agent account:
+ *
+ *   1. Agent funds the counterfactual account with USDC while it is still undeployed.
+ *   2. A single cold-start UserOp deploys the account via initCode and runs
+ *      executeBatch([USDC.permit(MAX_UINT256), USDC.transfer(recipient, amount)]).
+ *   3. Pimlico postOp pulls the gas fee in USDC after execution, using the allowance created
+ *      earlier in the same UserOp.
  *
  * Run:  RUN_E2E_ANVIL=1 pnpm --filter @agent-paymaster/api vitest run e2e-anvil
  *
  * Requires: anvil + forge (Foundry), all workspace packages built.
- * Not part of CI -- run manually to validate the full on-chain flow.
+ * Not part of CI — run manually to validate the full on-chain flow.
  */
 import { type ChildProcess, execSync, spawn } from "node:child_process";
 import { readFileSync, unlinkSync } from "node:fs";
@@ -17,19 +22,29 @@ import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   concatHex,
+  createClient,
   createPublicClient,
   createWalletClient,
+  custom,
   encodeFunctionData,
   formatUnits,
   getAddress,
   http,
+  maxUint256,
   parseAbi,
   toHex,
   type Hex,
 } from "viem";
 import { getUserOperationHash } from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
-import { BundlerService, type HexString } from "@agent-paymaster/bundler";
+import {
+  BundlerService,
+  ViemAdmissionSimulator,
+  ViemCallGasEstimator,
+  ViemGasSimulator,
+  type HexString,
+} from "@agent-paymaster/bundler";
+import { BundlerSubmitter } from "@agent-paymaster/bundler/src/submitter.js";
 
 import { createApp } from "./index.js";
 import { StaticPriceProvider } from "./paymaster-service.js";
@@ -72,6 +87,10 @@ interface AnvilFixture {
   factory: Hex;
 }
 
+interface Eip1193Provider {
+  request(args: { method: string; params?: unknown[] }): Promise<unknown>;
+}
+
 // ---------------------------------------------------------------------------
 // Chain definition for viem clients
 // ---------------------------------------------------------------------------
@@ -90,12 +109,19 @@ const ERC20_ABI = parseAbi([
   "function mint(address,uint256)",
   "function transfer(address,uint256) returns (bool)",
   "function nonces(address) view returns (uint256)",
+  "function allowance(address,address) view returns (uint256)",
+]);
+const USDC_PERMIT_ABI = parseAbi([
+  "function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)",
 ]);
 const FACTORY_ABI = parseAbi([
   "function getAddress(address,uint256) view returns (address)",
   "function createAccount(address,uint256) returns (address)",
 ]);
-const ACCOUNT_ABI = parseAbi(["function execute(address,uint256,bytes)"]);
+const ACCOUNT_ABI = parseAbi([
+  "function execute(address,uint256,bytes)",
+  "function executeBatch(address[] targets, uint256[] values, bytes[] calldatas)",
+]);
 const HANDLE_OPS_ABI = parseAbi([
   "function handleOps((address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData,bytes signature)[] ops, address payable beneficiary)",
   "error FailedOp(uint256 opIndex, string reason)",
@@ -109,7 +135,7 @@ const HANDLE_OPS_ABI = parseAbi([
 /** Spawn Anvil and wait for "Listening on" before resolving. */
 const spawnAnvil = (): Promise<ChildProcess> =>
   new Promise((ok, fail) => {
-    const child = spawn("anvil", ["--chain-id", String(CHAIN_ID), "--block-time", "1"], {
+    const child = spawn("anvil", ["--chain-id", String(CHAIN_ID)], {
       stdio: "pipe",
     });
     child.on("error", fail);
@@ -159,25 +185,49 @@ const appRpc = async (
   return body.result as Record<string, unknown>;
 };
 
+const createAppProvider = (app: {
+  request: (path: string, init: RequestInit) => Promise<Response>;
+}): Eip1193Provider => ({
+  async request({ method, params = [] }) {
+    const res = await app.request("/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+    const body = (await res.json()) as { result?: unknown; error?: { message: string } };
+    if (body.error) {
+      throw new Error(`${method}: ${body.error.message}`);
+    }
+    return body.result;
+  },
+});
+
+/** Split a 65-byte compact signature into (v, r, s) components. */
+const splitSig = (sig: Hex): { v: number; r: Hex; s: Hex } => {
+  const bytes = sig.slice(2);
+  const r = `0x${bytes.slice(0, 64)}` as Hex;
+  const s = `0x${bytes.slice(64, 128)}` as Hex;
+  const v = Number.parseInt(bytes.slice(128, 130), 16);
+  return { v, r, s };
+};
+
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
+describe.runIf(runE2E)("E2E: Anvil cold-start (single UserOp bootstrap)", () => {
   let anvil: ChildProcess;
   let fixture: AnvilFixture;
   let app: ReturnType<typeof createApp>;
+  let bundlerService: BundlerService;
+  let bundlerSubmitter: BundlerSubmitter;
   let counterfactual: Hex;
 
   // Shared state built progressively across ordered test steps
   let factoryCalldata: Hex;
   let initCode: Hex;
-  let callData: Hex;
+  let batchedCallData: Hex;
   let gasPrice: bigint;
-  let draftUserOp: Record<string, string>;
-  let stub: Record<string, string>;
-  let pm: Record<string, string>;
-  let txHash: Hex;
 
   // -------------------------------------------------------------------------
   // Setup: Anvil + contracts + USDC funding + in-process API
@@ -213,9 +263,12 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
     await publicClient.waitForTransactionReceipt({ hash: mintHash });
 
     // Wire up in-process bundler + API
-    const bundlerService = new BundlerService({
+    bundlerService = new BundlerService({
       chainId: CHAIN_ID,
       entryPoints: [fixture.entryPoint as HexString],
+      gasSimulator: new ViemGasSimulator(ANVIL_RPC, anvilChain),
+      callGasEstimator: new ViemCallGasEstimator(ANVIL_RPC, anvilChain),
+      admissionSimulator: new ViemAdmissionSimulator(ANVIL_RPC, anvilChain),
       paymasterVerificationGasLimit: 200_000n,
     });
     const bundlerClient = {
@@ -242,9 +295,21 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
         },
       },
     });
-  }, 90_000);
+
+    bundlerSubmitter = new BundlerSubmitter(bundlerService, {
+      chainRpcUrl: ANVIL_RPC,
+      privateKey: SUBMITTER_PK,
+      chain: anvilChain,
+      pollIntervalMs: 100,
+      maxOperationsPerBundle: 1,
+      maxInflightTransactions: 1,
+      txTimeoutMs: 15_000,
+    });
+    bundlerSubmitter.start();
+  }, 180_000);
 
   afterAll(async () => {
+    bundlerSubmitter?.stop();
     if (anvil) {
       anvil.kill("SIGTERM");
       await new Promise<void>((resolve) => {
@@ -258,14 +323,14 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
     try {
       unlinkSync(FIXTURE_PATH);
     } catch {
-      /* cleanup -- file may not exist */
+      /* cleanup — file may not exist */
     }
-  });
+  }, 180_000);
 
   // -------------------------------------------------------------------------
-  // Step 1: Build the draft UserOp (initCode + USDC transfer callData)
+  // Pre-flight: verify fresh state
   // -------------------------------------------------------------------------
-  it("builds a draft UserOp with initCode and USDC transfer", async () => {
+  it("counterfactual account has USDC, no code, no ETH", async () => {
     const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
     const agent = privateKeyToAccount(AGENT_PK);
 
@@ -276,98 +341,12 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
     });
     initCode = `${fixture.factory.toLowerCase()}${factoryCalldata.slice(2)}` as Hex;
 
-    const transferData = encodeFunctionData({
-      abi: ERC20_ABI,
-      functionName: "transfer",
-      args: [RECIPIENT, TRANSFER_AMOUNT],
-    });
-    callData = encodeFunctionData({
-      abi: ACCOUNT_ABI,
-      functionName: "execute",
-      args: [fixture.usdc, 0n, transferData],
-    });
-    gasPrice = await publicClient.getGasPrice();
-
-    // Gas limits must be generous for initCode deployment
-    const VGL = 700_000n;
-    const CGL = 100_000n;
-    const PVG = 50_000n;
-    draftUserOp = {
-      sender: counterfactual,
-      nonce: "0x0",
-      initCode,
-      callData,
-      callGasLimit: toHex(CGL),
-      verificationGasLimit: toHex(VGL),
-      preVerificationGas: toHex(PVG),
-      maxFeePerGas: toHex(gasPrice),
-      maxPriorityFeePerGas: toHex(gasPrice),
-      signature: DUMMY_SIG,
-    };
-
-    // Verify the counterfactual has USDC but no code and no ETH
-    const code = await publicClient.getCode({ address: counterfactual });
-    expect(code === undefined || code === "0x").toBe(true);
-
-    const balance = await publicClient.getBalance({ address: counterfactual });
-    expect(balance).toBe(0n);
-
-    const usdcBalance = (await publicClient.readContract({
-      address: fixture.usdc,
-      abi: ERC20_ABI,
-      functionName: "balanceOf",
-      args: [counterfactual],
-    })) as bigint;
-    expect(usdcBalance).toBe(INITIAL_USDC);
-  });
-
-  // -------------------------------------------------------------------------
-  // Step 2: Get a stub paymaster quote (cost estimate without permit)
-  // -------------------------------------------------------------------------
-  it("returns a valid stub quote via pm_getPaymasterStubData", async () => {
-    stub = (await appRpc(app, "pm_getPaymasterStubData", [
-      draftUserOp,
-      fixture.entryPoint,
-      "taikoMainnet",
-      {},
-    ])) as Record<string, string>;
-
-    // Verify stub response structure
-    expect(stub.paymaster).toBeDefined();
-    expect(getAddress(stub.paymaster)).toBe(getAddress(fixture.paymaster));
-    expect(stub.paymasterData).toBeDefined();
-    expect(stub.paymasterAndData).toBeDefined();
-    expect(stub.tokenAddress).toBeDefined();
-    expect(getAddress(stub.tokenAddress)).toBe(getAddress(fixture.usdc));
-    expect(stub.isStub).toBe(true);
-
-    // Gas limits should be non-zero hex quantities
-    expect(BigInt(stub.callGasLimit)).toBeGreaterThan(0n);
-    expect(BigInt(stub.verificationGasLimit)).toBeGreaterThan(0n);
-    expect(BigInt(stub.preVerificationGas)).toBeGreaterThan(0n);
-    expect(BigInt(stub.paymasterVerificationGasLimit)).toBeGreaterThan(0n);
-    expect(BigInt(stub.paymasterPostOpGasLimit)).toBeGreaterThan(0n);
-
-    // Cost estimate should be positive and affordable
-    const maxCostMicros = BigInt(stub.maxTokenCostMicros);
-    expect(maxCostMicros).toBeGreaterThan(0n);
-    expect(maxCostMicros).toBeLessThan(INITIAL_USDC);
-  });
-
-  // -------------------------------------------------------------------------
-  // Step 3: Sign USDC permit and get a full paymaster quote
-  // -------------------------------------------------------------------------
-  it("returns a full quote via pm_getPaymasterData with permit", async () => {
-    const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
-    const agent = privateKeyToAccount(AGENT_PK);
-
-    const maxCost = BigInt(stub.maxTokenCostMicros);
-    const permitNonce = await publicClient.readContract({
+    const permitNonce = (await publicClient.readContract({
       address: fixture.usdc,
       abi: ERC20_ABI,
       functionName: "nonces",
       args: [counterfactual],
-    });
+    })) as bigint;
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
     const permitSig = await agent.signTypedData({
       domain: {
@@ -388,44 +367,62 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
       primaryType: "Permit",
       message: {
         owner: counterfactual,
-        spender: getAddress(stub.paymaster),
-        value: maxCost,
+        spender: getAddress(fixture.paymaster),
+        value: maxUint256,
         nonce: permitNonce,
         deadline,
       },
     });
+    const { v, r, s } = splitSig(permitSig);
 
-    pm = (await appRpc(app, "pm_getPaymasterData", [
-      draftUserOp,
-      fixture.entryPoint,
-      "taikoMainnet",
-      {
-        permit: { value: maxCost.toString(), deadline: deadline.toString(), signature: permitSig },
-      },
-    ])) as Record<string, string>;
+    const permitCalldata = encodeFunctionData({
+      abi: USDC_PERMIT_ABI,
+      functionName: "permit",
+      args: [counterfactual, getAddress(fixture.paymaster), maxUint256, deadline, v, r, s],
+    });
+    const transferInner = encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "transfer",
+      args: [RECIPIENT, TRANSFER_AMOUNT],
+    });
+    batchedCallData = encodeFunctionData({
+      abi: ACCOUNT_ABI,
+      functionName: "executeBatch",
+      args: [
+        [fixture.usdc, fixture.usdc],
+        [0n, 0n],
+        [permitCalldata, transferInner],
+      ],
+    });
+    gasPrice = await publicClient.getGasPrice();
 
-    // Full quote should not be marked as stub
-    expect(pm.isStub).toBe(false);
-    expect(pm.paymaster).toBeDefined();
-    expect(pm.paymasterData).toBeDefined();
-    expect(pm.paymasterAndData).toBeDefined();
+    const code = await publicClient.getCode({ address: counterfactual });
+    expect(code === undefined || code === "0x").toBe(true);
 
-    // Gas limits from full quote should be valid
-    expect(BigInt(pm.callGasLimit)).toBeGreaterThan(0n);
-    expect(BigInt(pm.verificationGasLimit)).toBeGreaterThan(0n);
-    expect(BigInt(pm.preVerificationGas)).toBeGreaterThan(0n);
-    expect(BigInt(pm.paymasterVerificationGasLimit)).toBeGreaterThan(0n);
-    expect(BigInt(pm.paymasterPostOpGasLimit)).toBeGreaterThan(0n);
+    const ethBalance = await publicClient.getBalance({ address: counterfactual });
+    expect(ethBalance).toBe(0n);
 
-    // Quote should have a validity window
-    expect(pm.validUntil).toBeDefined();
-    expect(Number(pm.validUntil)).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    const usdcBalance = (await publicClient.readContract({
+      address: fixture.usdc,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [counterfactual],
+    })) as bigint;
+    expect(usdcBalance).toBe(INITIAL_USDC);
+
+    const allowance = (await publicClient.readContract({
+      address: fixture.usdc,
+      abi: ERC20_ABI,
+      functionName: "allowance",
+      args: [counterfactual, fixture.paymaster],
+    })) as bigint;
+    expect(allowance).toBe(0n);
   });
 
   // -------------------------------------------------------------------------
-  // Step 4: Sign the UserOp and submit handleOps
+  // Single cold-start op: deploy + permit + action + postOp settlement
   // -------------------------------------------------------------------------
-  it("signs the UserOp and submits handleOps successfully", async () => {
+  it("deploys, permits, transfers, and settles gas in a single cold-start UserOp", async () => {
     const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
     const agent = privateKeyToAccount(AGENT_PK);
     const submitter = privateKeyToAccount(SUBMITTER_PK);
@@ -435,7 +432,42 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
       account: submitter,
     });
 
-    // MUST use the gas limits from the API (quote was signed against them)
+    const paymasterUsdcBefore = (await publicClient.readContract({
+      address: fixture.usdc,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [fixture.paymaster],
+    })) as bigint;
+    const accountUsdcBefore = (await publicClient.readContract({
+      address: fixture.usdc,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [counterfactual],
+    })) as bigint;
+
+    // Quote the final cold-start UserOp. callData already includes permit + transfer.
+    const draftUserOp = {
+      sender: counterfactual,
+      nonce: "0x0",
+      initCode,
+      callData: batchedCallData,
+      maxFeePerGas: toHex(gasPrice),
+      maxPriorityFeePerGas: toHex(gasPrice),
+      signature: DUMMY_SIG,
+    };
+
+    const pm = (await appRpc(app, "pm_getPaymasterData", [
+      draftUserOp,
+      fixture.entryPoint,
+      "taikoMainnet",
+    ])) as Record<string, string>;
+
+    expect(pm.isStub).toBe(false);
+    expect(getAddress(pm.paymaster)).toBe(getAddress(fixture.paymaster));
+    // Inner paymasterData must start with Pimlico's ERC-20 mode + allowAllBundlers byte (0x03).
+    expect(pm.paymasterData.slice(2, 4)).toBe("03");
+
+    // Sign the final cold-start UserOp.
     const apiVGL = BigInt(pm.verificationGasLimit);
     const apiCGL = BigInt(pm.callGasLimit);
     const apiPVG = BigInt(pm.preVerificationGas);
@@ -448,7 +480,7 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
         nonce: 0n,
         factory: fixture.factory,
         factoryData: factoryCalldata,
-        callData,
+        callData: batchedCallData,
         callGasLimit: apiCGL,
         verificationGasLimit: apiVGL,
         preVerificationGas: apiPVG,
@@ -469,7 +501,7 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
     const accountGasLimits = concatHex([toHex(apiVGL, { size: 16 }), toHex(apiCGL, { size: 16 })]);
     const gasFees = concatHex([toHex(gasPrice, { size: 16 }), toHex(gasPrice, { size: 16 })]);
 
-    txHash = await submitterWallet.writeContract({
+    const txHash = await submitterWallet.writeContract({
       address: fixture.entryPoint,
       abi: HANDLE_OPS_ABI,
       functionName: "handleOps",
@@ -479,7 +511,7 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
             sender: counterfactual,
             nonce: 0n,
             initCode,
-            callData,
+            callData: batchedCallData,
             accountGasLimits,
             preVerificationGas: apiPVG,
             gasFees,
@@ -489,31 +521,24 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
         ],
         submitter.address,
       ],
-      gas: 2_000_000n,
+      gas: 3_000_000n,
     });
 
-    const txReceipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-    expect(txReceipt.status).toBe("success");
-  }, 30_000);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    expect(receipt.status).toBe("success");
 
-  // -------------------------------------------------------------------------
-  // Step 5: Verify on-chain state after handleOps
-  // -------------------------------------------------------------------------
-  it("deployed the ServoAccount (code exists at counterfactual)", async () => {
-    const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
     const code = await publicClient.getCode({ address: counterfactual });
     expect(code).toBeDefined();
     expect(code!.length).toBeGreaterThan(2);
-  });
 
-  it("account holds zero ETH (gas paid entirely via USDC paymaster)", async () => {
-    const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
-    const accountEth = await publicClient.getBalance({ address: counterfactual });
-    expect(accountEth).toBe(0n);
-  });
+    const allowance = (await publicClient.readContract({
+      address: fixture.usdc,
+      abi: ERC20_ABI,
+      functionName: "allowance",
+      args: [counterfactual, fixture.paymaster],
+    })) as bigint;
+    expect(allowance).toBe(maxUint256);
 
-  it("recipient received the expected USDC transfer amount", async () => {
-    const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
     const recipientUsdc = (await publicClient.readContract({
       address: fixture.usdc,
       abi: ERC20_ABI,
@@ -521,37 +546,235 @@ describe.runIf(runE2E)("E2E: Anvil cold-start", () => {
       args: [RECIPIENT],
     })) as bigint;
     expect(recipientUsdc).toBe(TRANSFER_AMOUNT);
-  });
 
-  it("account USDC balance decreased (transfer + paymaster fee)", async () => {
-    const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
-    const accountUsdc = (await publicClient.readContract({
+    const paymasterUsdcAfter = (await publicClient.readContract({
+      address: fixture.usdc,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [fixture.paymaster],
+    })) as bigint;
+    expect(paymasterUsdcAfter).toBeGreaterThan(paymasterUsdcBefore);
+
+    const accountUsdcAfter = (await publicClient.readContract({
       address: fixture.usdc,
       abi: ERC20_ABI,
       functionName: "balanceOf",
       args: [counterfactual],
     })) as bigint;
+    expect(accountUsdcAfter).toBeLessThan(accountUsdcBefore - TRANSFER_AMOUNT);
 
-    // Account should have less than initial minus transfer (paymaster took a fee)
-    expect(accountUsdc).toBeLessThan(INITIAL_USDC - TRANSFER_AMOUNT);
-    // But should still have most of its USDC (fee should be small relative to balance)
-    expect(accountUsdc).toBeGreaterThan(0n);
+    const accountEth = await publicClient.getBalance({ address: counterfactual });
+    expect(accountEth).toBe(0n);
 
     console.log(
-      `Account: ${counterfactual} | USDC: ${formatUnits(INITIAL_USDC, 6)} -> ${formatUnits(accountUsdc, 6)} | Recipient: ${formatUnits(TRANSFER_AMOUNT, 6)} | Fee: ${formatUnits(INITIAL_USDC - accountUsdc - TRANSFER_AMOUNT, 6)}`,
+      `Cold-start op: recipient USDC ${formatUnits(recipientUsdc, 6)} | account USDC ${formatUnits(accountUsdcBefore, 6)} -> ${formatUnits(accountUsdcAfter, 6)} | paymaster fee ${formatUnits(paymasterUsdcAfter - paymasterUsdcBefore, 6)}`,
     );
-  });
+  }, 120_000);
 
-  it("paymaster received a non-zero USDC fee", async () => {
+  it("submits the same cold-start flow through /rpc using viem only", async () => {
     const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
-    const accountUsdc = (await publicClient.readContract({
+    const agent = privateKeyToAccount(AGENT_PK);
+    const deployer = privateKeyToAccount(DEPLOYER_PK);
+    const deployerWallet = createWalletClient({
+      chain: anvilChain,
+      transport: http(ANVIL_RPC),
+      account: deployer,
+    });
+    const rpcClient = createClient({
+      chain: anvilChain,
+      transport: custom(createAppProvider(app)),
+    });
+    const smokeSalt = 1n;
+
+    const smokeCounterfactual = (await publicClient.readContract({
+      address: fixture.factory,
+      abi: FACTORY_ABI,
+      functionName: "getAddress",
+      args: [agent.address, smokeSalt],
+    })) as Hex;
+
+    const mintHash = await deployerWallet.writeContract({
       address: fixture.usdc,
       abi: ERC20_ABI,
-      functionName: "balanceOf",
-      args: [counterfactual],
-    })) as bigint;
+      functionName: "mint",
+      args: [smokeCounterfactual, INITIAL_USDC],
+    });
+    await publicClient.waitForTransactionReceipt({ hash: mintHash });
 
-    const paymasterFee = INITIAL_USDC - accountUsdc - TRANSFER_AMOUNT;
-    expect(paymasterFee).toBeGreaterThan(0n);
-  });
+    const smokeFactoryCalldata = encodeFunctionData({
+      abi: FACTORY_ABI,
+      functionName: "createAccount",
+      args: [agent.address, smokeSalt],
+    });
+    const smokeInitCode = `${fixture.factory.toLowerCase()}${smokeFactoryCalldata.slice(2)}` as Hex;
+
+    const permitNonce = (await publicClient.readContract({
+      address: fixture.usdc,
+      abi: ERC20_ABI,
+      functionName: "nonces",
+      args: [smokeCounterfactual],
+    })) as bigint;
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const transferInner = encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "transfer",
+      args: [RECIPIENT, TRANSFER_AMOUNT],
+    });
+    const actionOnlyCallData = encodeFunctionData({
+      abi: ACCOUNT_ABI,
+      functionName: "execute",
+      args: [fixture.usdc, 0n, transferInner],
+    });
+    const stub = (await rpcClient.request({
+      method: "pm_getPaymasterStubData",
+      params: [
+        {
+          sender: smokeCounterfactual,
+          nonce: "0x0",
+          initCode: smokeInitCode,
+          callData: actionOnlyCallData,
+          maxFeePerGas: toHex(gasPrice),
+          maxPriorityFeePerGas: toHex(gasPrice),
+          signature: DUMMY_SIG,
+        },
+        fixture.entryPoint,
+        "taikoMainnet",
+      ],
+    })) as Record<string, string>;
+
+    expect(stub.isStub).toBe(true);
+    expect(getAddress(stub.paymaster)).toBe(getAddress(fixture.paymaster));
+
+    const permitSig = await agent.signTypedData({
+      domain: {
+        name: "Mock USDC",
+        version: "2",
+        chainId: CHAIN_ID,
+        verifyingContract: fixture.usdc,
+      },
+      types: {
+        Permit: [
+          { name: "owner", type: "address" },
+          { name: "spender", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+        ],
+      },
+      primaryType: "Permit",
+      message: {
+        owner: smokeCounterfactual,
+        spender: getAddress(stub.paymaster),
+        value: maxUint256,
+        nonce: permitNonce,
+        deadline,
+      },
+    });
+    const { v, r, s } = splitSig(permitSig);
+    const permitCalldata = encodeFunctionData({
+      abi: USDC_PERMIT_ABI,
+      functionName: "permit",
+      args: [smokeCounterfactual, getAddress(stub.paymaster), maxUint256, deadline, v, r, s],
+    });
+    const smokeBatchedCallData = encodeFunctionData({
+      abi: ACCOUNT_ABI,
+      functionName: "executeBatch",
+      args: [
+        [fixture.usdc, fixture.usdc],
+        [0n, 0n],
+        [permitCalldata, transferInner],
+      ],
+    });
+
+    const draftUserOp = {
+      sender: smokeCounterfactual,
+      nonce: "0x0",
+      initCode: smokeInitCode,
+      callData: smokeBatchedCallData,
+      maxFeePerGas: toHex(gasPrice),
+      maxPriorityFeePerGas: toHex(gasPrice),
+      signature: DUMMY_SIG,
+    };
+
+    const quote = (await rpcClient.request({
+      method: "pm_getPaymasterData",
+      params: [draftUserOp, fixture.entryPoint, "taikoMainnet"],
+    })) as Record<string, string>;
+
+    const userOpHash = getUserOperationHash({
+      userOperation: {
+        sender: smokeCounterfactual,
+        nonce: 0n,
+        factory: fixture.factory,
+        factoryData: smokeFactoryCalldata,
+        callData: smokeBatchedCallData,
+        callGasLimit: BigInt(quote.callGasLimit),
+        verificationGasLimit: BigInt(quote.verificationGasLimit),
+        preVerificationGas: BigInt(quote.preVerificationGas),
+        maxFeePerGas: gasPrice,
+        maxPriorityFeePerGas: gasPrice,
+        paymaster: quote.paymaster as Hex,
+        paymasterData: quote.paymasterData as Hex,
+        paymasterVerificationGasLimit: BigInt(quote.paymasterVerificationGasLimit),
+        paymasterPostOpGasLimit: BigInt(quote.paymasterPostOpGasLimit),
+        signature: DUMMY_SIG,
+      },
+      entryPointAddress: fixture.entryPoint,
+      entryPointVersion: "0.7",
+      chainId: CHAIN_ID,
+    });
+
+    const signature = await agent.signMessage({ message: { raw: userOpHash } });
+    const submittedHash = (await rpcClient.request({
+      method: "eth_sendUserOperation",
+      params: [
+        {
+          ...draftUserOp,
+          callGasLimit: quote.callGasLimit,
+          verificationGasLimit: quote.verificationGasLimit,
+          preVerificationGas: quote.preVerificationGas,
+          paymasterVerificationGasLimit: quote.paymasterVerificationGasLimit,
+          paymasterPostOpGasLimit: quote.paymasterPostOpGasLimit,
+          paymasterAndData: quote.paymasterAndData,
+          signature,
+        },
+        fixture.entryPoint,
+      ],
+    })) as Hex;
+
+    expect(submittedHash).toMatch(/^0x[0-9a-f]{64}$/u);
+
+    let receipt: {
+      success: boolean;
+      receipt: { transactionHash: Hex };
+    } | null = null;
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      receipt = (await rpcClient.request({
+        method: "eth_getUserOperationReceipt",
+        params: [submittedHash],
+      })) as {
+        success: boolean;
+        receipt: { transactionHash: Hex };
+      } | null;
+
+      if (receipt !== null) {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    expect(receipt).not.toBeNull();
+    expect(receipt?.success).toBe(true);
+
+    const txReceipt = await publicClient.getTransactionReceipt({
+      hash: receipt!.receipt.transactionHash,
+    });
+    expect(txReceipt.status).toBe("success");
+
+    const deployedCode = await publicClient.getCode({ address: smokeCounterfactual });
+    expect(deployedCode).toBeDefined();
+    expect(deployedCode!.length).toBeGreaterThan(2);
+  }, 120_000);
 });
