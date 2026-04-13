@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import type { Chain } from "viem";
 import { taiko, taikoHoodi } from "viem/chains";
+import { SenderReputationTracker } from "./reputation.js";
 
 import { buildCanonicalUserOpHash } from "./entrypoint.js";
 import { BundlerPersistenceStore } from "./persistence.js";
@@ -142,13 +143,6 @@ export interface ClaimedUserOperation {
 export interface ClaimedUserOperations {
   entryPoint: HexString;
   userOperations: ClaimedUserOperation[];
-}
-
-interface SenderReputation {
-  failures: number;
-  windowStartedAt: number | null;
-  throttledUntil: number | null;
-  bannedUntil: number | null;
 }
 
 interface StoredUserOperation {
@@ -372,7 +366,7 @@ export class BundlerService {
 
   private readonly userOperations = new Map<string, StoredUserOperation>();
   private readonly bundles = new Map<string, string[]>();
-  private readonly senderReputation = new Map<string, SenderReputation>();
+  private readonly reputation: SenderReputationTracker;
   private readonly persistence?: BundlerPersistence;
   private readonly gasSimulator?: GasSimulator;
   private readonly callGasEstimator?: CallGasEstimator;
@@ -412,6 +406,7 @@ export class BundlerService {
       callGasHeuristicMultiplier: config.callGasHeuristicMultiplier ?? 3n,
       maxFinalizedOperations: config.maxFinalizedOperations ?? 10_000,
     };
+    this.reputation = new SenderReputationTracker(this.config, persistence);
     this.gasSimulator = config.gasSimulator;
     this.callGasEstimator = config.callGasEstimator;
     this.admissionSimulator = config.admissionSimulator;
@@ -462,7 +457,7 @@ export class BundlerService {
     }
 
     for (const reputation of persistence.loadSenderReputations()) {
-      this.senderReputation.set(reputation.sender, {
+      this.reputation.load(reputation.sender, {
         failures: reputation.failures,
         windowStartedAt: reputation.windowStartedAt ?? Date.now(),
         throttledUntil: reputation.throttledUntil,
@@ -515,11 +510,7 @@ export class BundlerService {
       }
     }
 
-    for (const reputation of this.senderReputation.values()) {
-      if (reputation.bannedUntil !== null && reputation.bannedUntil > now) {
-        bannedSenders += 1;
-      }
-    }
+    bannedSenders = this.reputation.countBannedSenders(now);
 
     const acceptanceToInclusionSuccessRate =
       this.userOpsAcceptedTotal === 0 ? 0 : this.userOpsIncludedTotal / this.userOpsAcceptedTotal;
@@ -740,7 +731,7 @@ export class BundlerService {
       parsed.entryPoint,
     );
 
-    this.ensureSenderCanSubmit(preparedUserOperation.sender);
+    this.reputation.ensureCanSubmit(preparedUserOperation.sender);
     assertEntryPointSupported(parsed.entryPoint, this.config.entryPoints);
 
     const userOpHash = this.buildUserOpHash(preparedUserOperation, parsed.entryPoint);
@@ -775,7 +766,7 @@ export class BundlerService {
         await this.admissionSimulator.simulateValidation(preparedUserOperation, parsed.entryPoint);
       } catch (error) {
         const reason = error instanceof Error ? error.message : "validation_failed";
-        this.recordDeterministicValidationFailure(preparedUserOperation.sender);
+        this.reputation.recordDeterministicFailure(preparedUserOperation.sender);
         throw new BundlerRpcError(
           RPC_INVALID_PARAMS,
           `UserOperation validation failed: ${reason}`,
@@ -1012,7 +1003,7 @@ export class BundlerService {
       this.userOpsIncludedTotal += 1;
       this.inclusionLatencySampleCount += 1;
       this.inclusionLatencyTotalMs += finalizationLatencyMs;
-      this.clearSenderReputation(operation.userOperation.sender);
+      this.reputation.clear(operation.userOperation.sender);
     } else {
       this.userOpsFailedTotal += 1;
       incrementReasonCounter(
@@ -1093,7 +1084,7 @@ export class BundlerService {
     operation.finalizedAt = Date.now();
     this.userOpsFailedTotal += 1;
     incrementReasonCounter(this.simulationFailureReasons, reason);
-    this.recordDeterministicValidationFailure(operation.userOperation.sender);
+    this.reputation.recordDeterministicFailure(operation.userOperation.sender);
     this.persistFinalizedOperation(operation);
     this.persistence?.removePendingOperation(userOpHash);
     this.enforceFinalizedRetention();
@@ -1299,128 +1290,6 @@ export class BundlerService {
         reason: "unhandled_exception",
       });
     }
-  }
-
-  private ensureSenderCanSubmit(sender: string): void {
-    const now = Date.now();
-    const reputation = this.getSenderReputation(sender, now);
-    if (!reputation) {
-      return;
-    }
-
-    if (reputation.bannedUntil !== null && reputation.bannedUntil > now) {
-      throw new BundlerRpcError(RPC_RESOURCE_UNAVAILABLE, "Sender is temporarily banned", {
-        reason: "sender_banned",
-        sender,
-        bannedUntil: reputation.bannedUntil,
-      });
-    }
-
-    if (reputation.throttledUntil !== null && reputation.throttledUntil > now) {
-      throw new BundlerRpcError(RPC_RESOURCE_UNAVAILABLE, "Sender is temporarily throttled", {
-        reason: "sender_throttled",
-        sender,
-        throttledUntil: reputation.throttledUntil,
-        retryAfterMs: reputation.throttledUntil - now,
-      });
-    }
-  }
-
-  private getSenderReputation(sender: string, now: number = Date.now()): SenderReputation | null {
-    const reputation = this.senderReputation.get(sender);
-    if (!reputation) {
-      return null;
-    }
-
-    if (
-      reputation.windowStartedAt !== null &&
-      now - reputation.windowStartedAt >= this.config.reputationWindowMs
-    ) {
-      this.clearSenderReputation(sender);
-      return null;
-    }
-
-    let updated = false;
-    if (reputation.bannedUntil !== null && reputation.bannedUntil <= now) {
-      reputation.bannedUntil = null;
-      updated = true;
-    }
-    if (reputation.throttledUntil !== null && reputation.throttledUntil <= now) {
-      reputation.throttledUntil = null;
-      updated = true;
-    }
-
-    if (
-      reputation.failures <= 0 &&
-      reputation.bannedUntil === null &&
-      reputation.throttledUntil === null
-    ) {
-      this.clearSenderReputation(sender);
-      return null;
-    }
-
-    if (updated) {
-      this.saveSenderReputation(sender, reputation);
-    }
-
-    return reputation;
-  }
-
-  private clearSenderReputation(sender: string): void {
-    this.senderReputation.delete(sender);
-    this.persistence?.deleteSenderReputation(sender);
-  }
-
-  private saveSenderReputation(sender: string, reputation: SenderReputation): void {
-    this.persistence?.saveSenderReputation(
-      sender,
-      reputation.failures,
-      reputation.windowStartedAt,
-      reputation.throttledUntil,
-      reputation.bannedUntil,
-    );
-  }
-
-  private recordDeterministicValidationFailure(sender: string): void {
-    const now = Date.now();
-    const current = this.getSenderReputation(sender, now) ?? {
-      failures: 0,
-      windowStartedAt: now,
-      throttledUntil: null,
-      bannedUntil: null,
-    };
-
-    const nextFailures = current.failures + 1;
-    const next: SenderReputation = {
-      failures: nextFailures,
-      windowStartedAt: current.windowStartedAt ?? now,
-      throttledUntil: null,
-      bannedUntil: null,
-    };
-
-    if (nextFailures >= this.config.reputationBanFailures) {
-      next.bannedUntil = now + this.config.banWindowMs;
-      logEvent("warn", "bundler.sender_banned", {
-        sender,
-        failures: nextFailures,
-        bannedUntil: next.bannedUntil,
-      });
-    } else if (nextFailures >= this.config.reputationThrottleFailures) {
-      next.throttledUntil = now + this.config.throttleWindowMs;
-      logEvent("warn", "bundler.sender_throttled", {
-        sender,
-        failures: nextFailures,
-        throttledUntil: next.throttledUntil,
-      });
-    } else {
-      logEvent("warn", "bundler.sender_validation_warning", {
-        sender,
-        failures: nextFailures,
-      });
-    }
-
-    this.senderReputation.set(sender, next);
-    this.saveSenderReputation(sender, next);
   }
 
   private buildUserOpHash(userOperation: UserOperation, entryPoint: HexString): string {
