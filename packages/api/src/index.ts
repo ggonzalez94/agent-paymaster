@@ -514,6 +514,20 @@ const appendMetricBlock = (
   }
 };
 
+const appendReasonDistribution = (
+  lines: string[],
+  name: string,
+  help: string,
+  reasons: Record<string, number>,
+): void => {
+  const samples = Object.entries(reasons)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([reason, value]) => ({ labels: { reason }, value }));
+  if (samples.length > 0) {
+    appendMetricBlock(lines, name, help, "gauge", samples);
+  }
+};
+
 const renderRuntimeMonitoringPrometheus = (snapshot: RuntimeMonitoringSnapshot): string => {
   const lines: string[] = [];
 
@@ -561,17 +575,10 @@ const renderRuntimeMonitoringPrometheus = (snapshot: RuntimeMonitoringSnapshot):
   );
 
   const ageDistributionSamples: PrometheusSample[] = [];
-  for (const [bucket, value] of Object.entries(snapshot.mempoolAgeDistribution.pending).sort()) {
-    ageDistributionSamples.push({
-      labels: { state: "pending", bucket },
-      value,
-    });
-  }
-  for (const [bucket, value] of Object.entries(snapshot.mempoolAgeDistribution.submitting).sort()) {
-    ageDistributionSamples.push({
-      labels: { state: "submitting", bucket },
-      value,
-    });
+  for (const [state, distribution] of Object.entries(snapshot.mempoolAgeDistribution)) {
+    for (const [bucket, value] of Object.entries(distribution).sort()) {
+      ageDistributionSamples.push({ labels: { state, bucket }, value });
+    }
   }
   if (ageDistributionSamples.length > 0) {
     appendMetricBlock(
@@ -619,39 +626,19 @@ const renderRuntimeMonitoringPrometheus = (snapshot: RuntimeMonitoringSnapshot):
     [{ value: snapshot.quoteToSubmissionConversionRate }],
   );
 
-  const simulationFailureSamples: PrometheusSample[] = Object.entries(
+  appendReasonDistribution(
+    lines,
+    "api_userop_simulation_failures_total",
+    "Distribution of simulation and admission-time failure reasons",
     snapshot.simulationFailureReasons,
-  )
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([reason, value]) => ({
-      labels: { reason },
-      value,
-    }));
-  if (simulationFailureSamples.length > 0) {
-    appendMetricBlock(
-      lines,
-      "api_userop_simulation_failures_total",
-      "Distribution of simulation and admission-time failure reasons",
-      "gauge",
-      simulationFailureSamples,
-    );
-  }
+  );
 
-  const revertReasonSamples: PrometheusSample[] = Object.entries(snapshot.revertReasons)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([reason, value]) => ({
-      labels: { reason },
-      value,
-    }));
-  if (revertReasonSamples.length > 0) {
-    appendMetricBlock(
-      lines,
-      "api_userop_revert_reasons_total",
-      "Distribution of on-chain handleOps revert reasons",
-      "gauge",
-      revertReasonSamples,
-    );
-  }
+  appendReasonDistribution(
+    lines,
+    "api_userop_revert_reasons_total",
+    "Distribution of on-chain handleOps revert reasons",
+    snapshot.revertReasons,
+  );
 
   if (lines.length === 0) {
     return "";

@@ -33,6 +33,9 @@ export const SERVO_TAIKO_ENTRY_POINT_V07: Address = "0x0000000071727de22e5e9d8ba
 /** EntryPoints Servo can actually execute through the configured paymaster path. */
 export const SERVO_SUPPORTED_ENTRY_POINTS = [SERVO_TAIKO_ENTRY_POINT_V07] as const;
 
+/** Default public Taiko mainnet RPC endpoint, used as last-resort fallback. */
+export const DEFAULT_TAIKO_RPC_URL = "https://rpc.mainnet.taiko.xyz";
+
 export interface ServiceHealth {
   service: string;
   status: "ok" | "degraded";

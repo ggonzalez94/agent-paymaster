@@ -2,6 +2,7 @@ import {
   ADDRESS_PATTERN,
   bigIntToHex,
   buildHealth,
+  DEFAULT_TAIKO_RPC_URL,
   logEvent,
   makeJsonRpcError,
   makeJsonRpcResult,
@@ -1407,7 +1408,7 @@ if (process.env.NODE_ENV !== "test") {
     process.env.BUNDLER_CHAIN_RPC_URL?.trim() ||
     process.env.TAIKO_RPC_URL?.trim() ||
     process.env.TAIKO_MAINNET_RPC_URL?.trim() ||
-    "https://rpc.mainnet.taiko.xyz";
+    DEFAULT_TAIKO_RPC_URL;
   const service = new BundlerService(
     {
       chainId,

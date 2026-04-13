@@ -1,9 +1,8 @@
-import { bigIntToHex } from "@agent-paymaster/shared";
+import { DEFAULT_TAIKO_RPC_URL, bigIntToHex } from "@agent-paymaster/shared";
 
 import type { GasPriceGuidance, GasPriceOracle } from "./paymaster-service.js";
 import { median } from "./price-provider.js";
 
-const DEFAULT_TAIKO_RPC_URL = "https://rpc.mainnet.taiko.xyz";
 const DEFAULT_CACHE_TTL_MS = 10_000;
 const DEFAULT_TIMEOUT_MS = 2_000;
 /**
