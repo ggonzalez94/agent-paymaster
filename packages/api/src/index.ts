@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 
-import { buildHealth, logEvent } from "@agent-paymaster/shared";
+import {
+  buildHealth,
+  logEvent,
+  RPC_INTERNAL_ERROR,
+  RPC_INVALID_PARAMS,
+  RPC_INVALID_REQUEST,
+  RPC_PARSE_ERROR,
+  RPC_RATE_LIMITED,
+} from "@agent-paymaster/shared";
 import { Hono } from "hono";
 
 import { type BundlerClient, HttpBundlerClient } from "./bundler-client.js";
@@ -37,11 +45,6 @@ import {
   makeJsonRpcError,
 } from "./types.js";
 
-const RPC_PARSE_ERROR = -32700;
-const RPC_INVALID_REQUEST = -32600;
-const RPC_INVALID_PARAMS = -32602;
-const RPC_INTERNAL_ERROR = -32603;
-const RPC_RATE_LIMITED = -32005;
 const USER_OPERATION_SUBMISSION_METHODS = new Set(["eth_sendUserOperation"]);
 
 /**

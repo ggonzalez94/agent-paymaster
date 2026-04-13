@@ -7,6 +7,12 @@ import {
   makeJsonRpcError,
   makeJsonRpcResult,
   normalizePaymasterAndData,
+  RPC_INTERNAL_ERROR,
+  RPC_INVALID_PARAMS,
+  RPC_INVALID_REQUEST,
+  RPC_METHOD_NOT_FOUND,
+  RPC_PARSE_ERROR,
+  RPC_RESOURCE_UNAVAILABLE,
   SERVO_SUPPORTED_ENTRY_POINTS,
   SERVO_TAIKO_ENTRY_POINT_V07,
   type HexString,
@@ -37,13 +43,6 @@ export type { HexString } from "@agent-paymaster/shared";
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PATTERN = /^0x[0-9a-fA-F]*$/;
 const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/;
-
-const RPC_PARSE_ERROR = -32700;
-const RPC_INVALID_REQUEST = -32600;
-const RPC_METHOD_NOT_FOUND = -32601;
-const RPC_INVALID_PARAMS = -32602;
-const RPC_INTERNAL_ERROR = -32603;
-const RPC_RESOURCE_UNAVAILABLE = -32001;
 
 const REPUTATION_THROTTLE_FAILURES = 3;
 const REPUTATION_BAN_FAILURES = 5;

@@ -14,6 +14,13 @@ export {
   isJsonRpcId,
   isJsonRpcRequest,
   isObject,
+  RPC_PARSE_ERROR,
+  RPC_INVALID_REQUEST,
+  RPC_METHOD_NOT_FOUND,
+  RPC_INVALID_PARAMS,
+  RPC_INTERNAL_ERROR,
+  RPC_RESOURCE_UNAVAILABLE,
+  RPC_RATE_LIMITED,
 } from "./json-rpc.js";
 
 export type ChainName = "taikoMainnet" | "taikoHoodi";

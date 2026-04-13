@@ -6,6 +6,7 @@ import {
   computeServoPaymasterSigningHash,
   encodeServoErc20PaymasterConfig,
   packPaymasterAndData,
+  RPC_INVALID_PARAMS,
   SERVO_SUPPORTED_ENTRY_POINTS,
 } from "@agent-paymaster/shared";
 import { concatHex, toHex } from "viem";
@@ -25,7 +26,6 @@ const QUOTE_ID_LENGTH = 24;
 const UINT128_MAX = (1n << 128n) - 1n;
 const UINT48_MAX = (1n << 48n) - 1n;
 const BPS_SCALE = 10_000n;
-const RPC_INVALID_PARAMS = -32602;
 const DEFAULT_BILLED_PAYMASTER_VALIDATION_GAS_LIMIT = 50_000n;
 const DEFAULT_BILLED_PAYMASTER_POST_OP_GAS = 50_000n;
 
