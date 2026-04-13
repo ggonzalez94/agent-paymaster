@@ -36,7 +36,7 @@ export interface SubmissionReceipt {
   logs: UserOperationReceiptLog[];
 }
 
-export interface BundlerSubmitterConfig {
+interface BundlerSubmitterConfig {
   chainRpcUrl: string;
   privateKey: HexString;
   chain?: Chain;
@@ -132,7 +132,7 @@ const uniqueTransactionCount = (operations: ClaimedUserOperation[]): number =>
     ),
   ).size;
 
-export class ViemSubmissionClient implements SubmissionClient {
+class ViemSubmissionClient implements SubmissionClient {
   private readonly publicClient;
   private readonly walletClient;
   private readonly account;

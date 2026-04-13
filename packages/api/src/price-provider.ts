@@ -42,7 +42,7 @@ interface CachedPrice {
   expiresAtMs: number;
 }
 
-export interface CompositePriceProviderConfig {
+interface CompositePriceProviderConfig {
   primary: OracleSource;
   fallbacks: readonly OracleSource[];
   maxPrimaryDeviationBps?: number;
@@ -162,9 +162,9 @@ const CHAINLINK_AGGREGATOR_ABI = parseAbi([
   "function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
 ]);
 
-export const DEFAULT_CHAINLINK_ETH_USD_FEED =
+const DEFAULT_CHAINLINK_ETH_USD_FEED =
   "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419" as const satisfies Address;
-export const DEFAULT_CHAINLINK_USDC_USD_FEED =
+const DEFAULT_CHAINLINK_USDC_USD_FEED =
   "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6" as const satisfies Address;
 
 interface ChainlinkFeedSnapshot {
@@ -175,7 +175,7 @@ interface ChainlinkFeedSnapshot {
 
 type ChainlinkFeedReader = (feedAddress: Address) => Promise<ChainlinkFeedSnapshot>;
 
-export interface ChainlinkOracleSourceConfig {
+interface ChainlinkOracleSourceConfig {
   ethereumRpcUrl?: string;
   ethUsdFeed?: Address;
   usdcUsdFeed?: Address;

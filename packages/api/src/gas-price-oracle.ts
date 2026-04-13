@@ -1,3 +1,5 @@
+import { bigIntToHex } from "@agent-paymaster/shared";
+
 import type { GasPriceGuidance, GasPriceOracle } from "./paymaster-service.js";
 
 const DEFAULT_TAIKO_RPC_URL = "https://rpc.mainnet.taiko.xyz";
@@ -72,9 +74,9 @@ export class RpcGasPriceOracle implements GasPriceOracle {
       const suggestedMaxFee = parsed.baseFee * 2n + parsed.medianTip;
 
       const guidance: GasPriceGuidance = {
-        baseFeePerGas: toHex(parsed.baseFee),
-        suggestedMaxFeePerGas: toHex(suggestedMaxFee),
-        suggestedMaxPriorityFeePerGas: toHex(parsed.medianTip),
+        baseFeePerGas: bigIntToHex(parsed.baseFee),
+        suggestedMaxFeePerGas: bigIntToHex(suggestedMaxFee),
+        suggestedMaxPriorityFeePerGas: bigIntToHex(parsed.medianTip),
         fetchedAt: new Date().toISOString(),
       };
 
@@ -163,5 +165,3 @@ export class RpcGasPriceOracle implements GasPriceOracle {
     return { baseFee, medianTip };
   }
 }
-
-const toHex = (value: bigint): `0x${string}` => `0x${value.toString(16)}`;

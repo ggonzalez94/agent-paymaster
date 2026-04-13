@@ -64,7 +64,7 @@ export interface GasPriceGuidance {
   fetchedAt: string;
 }
 
-export interface PaymasterCapabilities {
+interface PaymasterCapabilities {
   supportedChains: PaymasterCapabilityChain[];
   supportedEntryPoints: string[];
   defaultEntryPoint: string | null;

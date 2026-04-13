@@ -59,7 +59,7 @@ export interface BundlerClient {
   health(): Promise<DependencyHealth>;
 }
 
-export interface HttpBundlerClientConfig {
+interface HttpBundlerClientConfig {
   rpcUrl: string;
   healthUrl: string;
   timeoutMs?: number;

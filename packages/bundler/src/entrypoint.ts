@@ -34,7 +34,7 @@ export interface UserOperationExecution {
   revertReason: string | null;
 }
 
-export interface ReceiptLog {
+interface ReceiptLog {
   address: string;
   data: HexString;
   topics: readonly HexString[];
