@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  bigIntToHex,
   computeServoPaymasterSigningHash,
   encodeServoErc20PaymasterConfig,
   packPaymasterAndData,
@@ -223,14 +224,6 @@ const parseBytes = (value: unknown, fieldName: string): `0x${string}` => {
   }
 
   return value.toLowerCase() as `0x${string}`;
-};
-
-const toHexQuantity = (value: bigint): `0x${string}` => {
-  if (value < 0n) {
-    throw new Error("Negative values are not supported");
-  }
-
-  return `0x${value.toString(16)}`;
 };
 
 const formatUsdcMicros = (microsInput: bigint): string => {
@@ -743,13 +736,13 @@ export class PaymasterService {
       paymaster: this.config.paymasterAddress,
       paymasterData,
       paymasterAndData,
-      callGasLimit: toHexQuantity(gas.callGasLimit),
-      verificationGasLimit: toHexQuantity(gas.verificationGasLimit),
-      preVerificationGas: toHexQuantity(gas.preVerificationGas),
-      paymasterVerificationGasLimit: toHexQuantity(gas.paymasterVerificationGasLimit),
-      paymasterPostOpGasLimit: toHexQuantity(gas.paymasterPostOpGasLimit),
-      estimatedGasLimit: toHexQuantity(totalGasLimit),
-      estimatedGasWei: toHexQuantity(estimatedGasWei),
+      callGasLimit: bigIntToHex(gas.callGasLimit),
+      verificationGasLimit: bigIntToHex(gas.verificationGasLimit),
+      preVerificationGas: bigIntToHex(gas.preVerificationGas),
+      paymasterVerificationGasLimit: bigIntToHex(gas.paymasterVerificationGasLimit),
+      paymasterPostOpGasLimit: bigIntToHex(gas.paymasterPostOpGasLimit),
+      estimatedGasLimit: bigIntToHex(totalGasLimit),
+      estimatedGasWei: bigIntToHex(estimatedGasWei),
       maxTokenCostMicros: boundedMaxTokenCostMicros.toString(),
       maxTokenCost: formatUsdcMicros(boundedMaxTokenCostMicros),
       validUntil: validUntilSeconds,

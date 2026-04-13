@@ -50,6 +50,14 @@ export const SERVO_PAYMASTER_MODE_ERC20 = 1;
  */
 export const SERVO_ERC20_PAYMASTER_DATA_NO_SIG_LENGTH = 118;
 
+export const bigIntToHex = (value: bigint): HexString => {
+  if (value < 0n) {
+    throw new Error("Negative bigint cannot be encoded as hex quantity");
+  }
+
+  return `0x${value.toString(16)}`;
+};
+
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;
 const UINT128_MAX = (1n << 128n) - 1n;

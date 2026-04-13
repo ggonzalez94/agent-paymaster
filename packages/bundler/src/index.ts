@@ -1,4 +1,5 @@
 import {
+  bigIntToHex,
   buildHealth,
   isJsonRpcId,
   isObject,
@@ -8,6 +9,7 @@ import {
   normalizePaymasterAndData,
   SERVO_SUPPORTED_ENTRY_POINTS,
   SERVO_TAIKO_ENTRY_POINT_V07,
+  type HexString,
   type JsonRpcFailure,
   type JsonRpcId,
   type JsonRpcRequest,
@@ -30,7 +32,7 @@ import {
 import { BundlerPersistenceStore } from "./persistence.js";
 import { type BundlerSubmitterHealth, BundlerSubmitter } from "./submitter.js";
 
-export type HexString = `0x${string}`;
+export type { HexString } from "@agent-paymaster/shared";
 
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PATTERN = /^0x[0-9a-fA-F]*$/;
@@ -423,14 +425,6 @@ const hexToBigInt = (value: string): bigint => {
   }
 
   return BigInt(normalized);
-};
-
-const bigIntToHex = (value: bigint): HexString => {
-  if (value < 0n) {
-    throw new Error("Negative bigint cannot be encoded as hex quantity");
-  }
-
-  return `0x${value.toString(16)}`;
 };
 
 const normalizeAddress = (value: string): HexString => {
