@@ -7,7 +7,7 @@ const DEFAULT_CRITICAL_THRESHOLD_WEI = 500_000_000_000_000n; // 0.0005 ETH (~2 o
 const MONITOR_TIMEOUT_MS = 3_000;
 const ABI_WORD_HEX_LENGTH = 64;
 
-export type DepositStatus = "ok" | "low" | "critical" | "unknown";
+type DepositStatus = "ok" | "low" | "critical" | "unknown";
 
 export interface DepositHealth {
   status: DepositStatus;
@@ -16,7 +16,7 @@ export interface DepositHealth {
   error?: string;
 }
 
-export interface EntryPointMonitorConfig {
+interface EntryPointMonitorConfig {
   taikoRpcUrl?: string;
   paymasterAddress: string;
   entryPointAddress?: string;

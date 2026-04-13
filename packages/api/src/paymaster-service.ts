@@ -23,8 +23,6 @@ import { privateKeyToAccount } from "viem/accounts";
 import type { BundlerClient } from "./bundler-client.js";
 import type { PriceProvider } from "./price-provider.js";
 
-export type { PriceProvider } from "./price-provider.js";
-
 const HEX_QUANTITY_PATTERN = /^0x[0-9a-fA-F]+$/;
 const QUOTE_ID_LENGTH = 24;
 const BPS_SCALE = 10_000n;
@@ -162,7 +160,7 @@ export interface GasPriceOracle {
   getGasPriceGuidance(): Promise<GasPriceGuidance | null>;
 }
 
-export interface PaymasterServiceConfig {
+interface PaymasterServiceConfig {
   paymasterAddress: string;
   quoteTtlSeconds: number;
   surchargeBps: number;

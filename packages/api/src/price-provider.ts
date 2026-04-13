@@ -26,7 +26,7 @@ export class StaticPriceProvider implements PriceProvider {
   }
 }
 
-export interface PriceObservation {
+interface PriceObservation {
   source: string;
   usdcPerEthMicros: bigint;
   observedAtMs: number;
