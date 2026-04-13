@@ -1,11 +1,17 @@
 import {
   ADDRESS_PATTERN,
+  bigIntToHex,
+  isJsonRpcId,
   isObject,
+  normalizePaymasterAndData,
   RPC_INVALID_PARAMS,
+  RPC_INVALID_REQUEST,
   type HexString,
+  type JsonRpcId,
+  type JsonRpcRequest,
 } from "@agent-paymaster/shared";
 
-import type { UserOperationReceiptLog } from "./index.js";
+import type { UserOperation, UserOperationReceiptLog } from "./index.js";
 
 export interface BundlerRpcErrorData {
   method?: string;
@@ -137,6 +143,333 @@ export const parseReceiptLog = (logInput: unknown, index: number): UserOperation
     ),
     logIndex: parseOptionalHexQuantity(logInput.logIndex, `logs[${index}].logIndex`),
     removed: logInput.removed === undefined ? undefined : Boolean(logInput.removed),
+  };
+};
+
+export interface SendUserOperationParamsInput {
+  userOperation: unknown;
+  entryPoint: unknown;
+}
+
+export interface ParsedSendUserOperationParams {
+  userOperation: UserOperation;
+  entryPoint: HexString;
+}
+
+export interface BundleSubmission {
+  transactionHash: HexString;
+  blockNumber: number;
+  blockHash: HexString;
+  gasUsed: HexString;
+  gasCost: HexString;
+  effectiveGasPrice?: HexString;
+  success?: boolean;
+  reason?: string;
+  revertReason?: string;
+  logs?: UserOperationReceiptLog[];
+}
+
+export const parseJsonRpcRequest = (
+  payload: unknown,
+):
+  | { ok: true; request: JsonRpcRequest }
+  | { ok: false; id: JsonRpcId; code: number; message: string; data?: BundlerRpcErrorData } => {
+  if (!isObject(payload)) {
+    return {
+      ok: false,
+      id: null,
+      code: RPC_INVALID_REQUEST,
+      message: "Invalid Request",
+      data: { reason: "payload_not_object" },
+    };
+  }
+
+  const id: JsonRpcId = isJsonRpcId(payload.id) ? payload.id : null;
+
+  if (payload.jsonrpc !== "2.0" || typeof payload.method !== "string") {
+    return {
+      ok: false,
+      id,
+      code: RPC_INVALID_REQUEST,
+      message: "Invalid Request",
+      data: { reason: "jsonrpc_shape_invalid" },
+    };
+  }
+
+  return {
+    ok: true,
+    request: {
+      jsonrpc: "2.0",
+      id,
+      method: payload.method,
+      params: payload.params,
+    },
+  };
+};
+
+export const parsePositionalParams = (
+  method: string,
+  params: unknown,
+  expectedCount: number,
+): unknown[] => {
+  if (!Array.isArray(params)) {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "Method params must be an array", {
+      reason: "params_not_array",
+      method,
+    });
+  }
+
+  if (params.length < expectedCount) {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "Missing required positional params", {
+      reason: "params_missing",
+      method,
+      expectedCount,
+    });
+  }
+
+  return params;
+};
+
+export const parseEntryPoint = (entryPointInput: unknown): HexString => {
+  if (typeof entryPointInput !== "string") {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "entryPoint must be a string", {
+      reason: "entrypoint_invalid_type",
+    });
+  }
+
+  return normalizeAddress(entryPointInput);
+};
+
+export const parseOptionalChainId = (chainIdInput: unknown): number | null => {
+  if (chainIdInput === undefined || chainIdInput === null) {
+    return null;
+  }
+
+  if (typeof chainIdInput === "number" && Number.isInteger(chainIdInput) && chainIdInput >= 0) {
+    return chainIdInput;
+  }
+
+  if (typeof chainIdInput === "bigint" && chainIdInput >= 0n) {
+    return Number(chainIdInput);
+  }
+
+  if (typeof chainIdInput === "string") {
+    const trimmed = chainIdInput.trim();
+    if (trimmed.length === 0) {
+      throw new BundlerRpcError(RPC_INVALID_PARAMS, "userOperation.chainId must not be empty", {
+        reason: "chain_id_invalid",
+      });
+    }
+
+    const parsed =
+      trimmed.startsWith("0x") || trimmed.startsWith("0X")
+        ? Number.parseInt(trimmed, 16)
+        : Number.parseInt(trimmed, 10);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  throw new BundlerRpcError(RPC_INVALID_PARAMS, "userOperation.chainId must be an integer", {
+    reason: "chain_id_invalid",
+  });
+};
+
+export const parseUserOperation = (userOperationInput: unknown, chainId: number): UserOperation => {
+  if (!isObject(userOperationInput)) {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "userOperation must be an object", {
+      reason: "userop_not_object",
+    });
+  }
+
+  if (typeof userOperationInput.sender !== "string") {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "userOperation.sender is required", {
+      reason: "sender_missing",
+    });
+  }
+
+  const sender = normalizeAddress(userOperationInput.sender);
+  const parsedChainId = parseOptionalChainId(userOperationInput.chainId);
+  if (parsedChainId !== null && parsedChainId !== chainId) {
+    throw new BundlerRpcError(
+      RPC_INVALID_PARAMS,
+      `userOperation.chainId must match bundler chainId (${chainId})`,
+      {
+        reason: "chain_id_mismatch",
+        expectedChainId: chainId,
+        submittedChainId: parsedChainId,
+      },
+    );
+  }
+
+  const initCode = resolveInitCode(userOperationInput);
+
+  const userOperation: UserOperation = {
+    sender,
+    nonce: parseHexField(userOperationInput.nonce, "nonce"),
+    initCode,
+    callData: parseHexField(userOperationInput.callData, "callData"),
+    maxFeePerGas: parseHexField(userOperationInput.maxFeePerGas, "maxFeePerGas"),
+    maxPriorityFeePerGas: parseHexField(
+      userOperationInput.maxPriorityFeePerGas,
+      "maxPriorityFeePerGas",
+    ),
+    signature: parseHexField(userOperationInput.signature, "signature"),
+  };
+
+  if (userOperation.signature === "0x") {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "userOperation.signature must not be empty", {
+      reason: "signature_empty",
+    });
+  }
+
+  if (userOperationInput.callGasLimit !== undefined) {
+    userOperation.callGasLimit = parseHexField(userOperationInput.callGasLimit, "callGasLimit");
+  }
+
+  if (userOperationInput.verificationGasLimit !== undefined) {
+    userOperation.verificationGasLimit = parseHexField(
+      userOperationInput.verificationGasLimit,
+      "verificationGasLimit",
+    );
+  }
+
+  if (userOperationInput.preVerificationGas !== undefined) {
+    userOperation.preVerificationGas = parseHexField(
+      userOperationInput.preVerificationGas,
+      "preVerificationGas",
+    );
+  }
+
+  if (userOperationInput.paymasterVerificationGasLimit !== undefined) {
+    userOperation.paymasterVerificationGasLimit = parseHexField(
+      userOperationInput.paymasterVerificationGasLimit,
+      "paymasterVerificationGasLimit",
+    );
+  }
+
+  if (userOperationInput.paymasterPostOpGasLimit !== undefined) {
+    userOperation.paymasterPostOpGasLimit = parseHexField(
+      userOperationInput.paymasterPostOpGasLimit,
+      "paymasterPostOpGasLimit",
+    );
+  }
+
+  if (userOperationInput.paymasterAndData !== undefined) {
+    userOperation.paymasterAndData = parseHexField(
+      userOperationInput.paymasterAndData,
+      "paymasterAndData",
+    );
+
+    if (userOperation.paymasterAndData !== "0x" && userOperation.paymasterAndData.length < 42) {
+      throw new BundlerRpcError(
+        RPC_INVALID_PARAMS,
+        "paymasterAndData must include a paymaster address prefix",
+        {
+          reason: "paymaster_data_too_short",
+        },
+      );
+    }
+  }
+
+  if (userOperationInput.l1DataGas !== undefined) {
+    userOperation.l1DataGas = parseHexField(userOperationInput.l1DataGas, "l1DataGas");
+  }
+
+  if (userOperation.paymasterAndData !== undefined && userOperation.paymasterAndData !== "0x") {
+    try {
+      const normalized = normalizePaymasterAndData({
+        paymasterAndData: userOperation.paymasterAndData,
+        paymasterVerificationGasLimit:
+          userOperation.paymasterVerificationGasLimit === undefined
+            ? undefined
+            : hexToBigInt(userOperation.paymasterVerificationGasLimit),
+        paymasterPostOpGasLimit:
+          userOperation.paymasterPostOpGasLimit === undefined
+            ? undefined
+            : hexToBigInt(userOperation.paymasterPostOpGasLimit),
+      });
+
+      userOperation.paymasterAndData = normalized.paymasterAndData;
+      userOperation.paymasterVerificationGasLimit ??= bigIntToHex(
+        normalized.paymasterVerificationGasLimit,
+      );
+      userOperation.paymasterPostOpGasLimit ??= bigIntToHex(normalized.paymasterPostOpGasLimit);
+    } catch (error) {
+      throw new BundlerRpcError(
+        RPC_INVALID_PARAMS,
+        error instanceof Error ? error.message : "Invalid paymasterAndData",
+        {
+          reason: "paymaster_data_invalid",
+        },
+      );
+    }
+  }
+
+  return userOperation;
+};
+
+export const parseSendUserOperationParams = (
+  input: SendUserOperationParamsInput,
+  chainId: number,
+): ParsedSendUserOperationParams => {
+  return {
+    userOperation: parseUserOperation(input.userOperation, chainId),
+    entryPoint: parseEntryPoint(input.entryPoint),
+  };
+};
+
+export const assertEntryPointSupported = (
+  entryPoint: string,
+  entryPoints: readonly string[],
+): void => {
+  if (!entryPoints.includes(entryPoint)) {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "Unsupported entry point", {
+      reason: "entrypoint_unsupported",
+      entryPoint,
+    });
+  }
+};
+
+export const parseBundleSubmission = (submissionInput: unknown): BundleSubmission => {
+  if (!isObject(submissionInput)) {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "Submission payload must be an object", {
+      reason: "submission_invalid",
+    });
+  }
+
+  const transactionHash = parseHashField(
+    submissionInput.transactionHash,
+    "transactionHash",
+  ) as HexString;
+  const blockHash = parseHashField(submissionInput.blockHash, "blockHash") as HexString;
+  if (
+    typeof submissionInput.blockNumber !== "number" ||
+    !Number.isInteger(submissionInput.blockNumber) ||
+    submissionInput.blockNumber < 0
+  ) {
+    throw new BundlerRpcError(RPC_INVALID_PARAMS, "blockNumber must be a non-negative integer", {
+      reason: "block_number_invalid",
+    });
+  }
+
+  return {
+    transactionHash,
+    blockNumber: submissionInput.blockNumber,
+    blockHash,
+    gasUsed: parseHexField(submissionInput.gasUsed, "gasUsed"),
+    gasCost: parseHexField(submissionInput.gasCost, "gasCost"),
+    effectiveGasPrice:
+      submissionInput.effectiveGasPrice === undefined
+        ? undefined
+        : parseHexField(submissionInput.effectiveGasPrice, "effectiveGasPrice"),
+    success: submissionInput.success === undefined ? true : Boolean(submissionInput.success),
+    reason: submissionInput.reason === undefined ? undefined : String(submissionInput.reason),
+    revertReason:
+      submissionInput.revertReason === undefined ? undefined : String(submissionInput.revertReason),
+    logs: Array.isArray(submissionInput.logs)
+      ? submissionInput.logs.map((log, index) => parseReceiptLog(log, index))
+      : undefined,
   };
 };
 
