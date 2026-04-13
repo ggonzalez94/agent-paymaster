@@ -1,4 +1,5 @@
 import {
+  ADDRESS_PATTERN,
   bigIntToHex,
   buildHealth,
   isJsonRpcId,
@@ -7,6 +8,7 @@ import {
   makeJsonRpcError,
   makeJsonRpcResult,
   normalizePaymasterAndData,
+  PRIVATE_KEY_PATTERN,
   RPC_INTERNAL_ERROR,
   RPC_INVALID_PARAMS,
   RPC_INVALID_REQUEST,
@@ -40,9 +42,7 @@ import { type BundlerSubmitterHealth, BundlerSubmitter } from "./submitter.js";
 
 export type { HexString } from "@agent-paymaster/shared";
 
-const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_PATTERN = /^0x[0-9a-fA-F]*$/;
-const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 
 const REPUTATION_THROTTLE_FAILURES = 3;
 const REPUTATION_BAN_FAILURES = 5;

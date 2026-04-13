@@ -11,6 +11,7 @@ import {
   toHex,
 } from "viem";
 
+import { UINT128_MAX } from "@agent-paymaster/shared";
 import type { HexString, UserOperation } from "./index.js";
 
 export interface PackedUserOperation {
@@ -59,8 +60,6 @@ export const ENTRY_POINT_SIMULATION_ABI = parseAbi([
 
 const ERROR_STRING_SELECTOR = "0x08c379a0";
 const PANIC_SELECTOR = "0x4e487b71";
-const UINT128_MAX = (1n << 128n) - 1n;
-
 export const hexToBigInt = (value: HexString): bigint => (value === "0x" ? 0n : BigInt(value));
 
 const toUint128 = (value: bigint, fieldName: string): bigint => {

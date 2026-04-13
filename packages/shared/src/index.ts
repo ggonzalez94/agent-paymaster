@@ -65,9 +65,10 @@ export const bigIntToHex = (value: bigint): HexString => {
   return `0x${value.toString(16)}`;
 };
 
-const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
-const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;
-const UINT128_MAX = (1n << 128n) - 1n;
+export const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+export const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/;
+export const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;
+export const UINT128_MAX = (1n << 128n) - 1n;
 
 const PAYMASTER_ADDRESS_END = 42;
 const PAYMASTER_VALIDATION_GAS_END = 74;

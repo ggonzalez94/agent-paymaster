@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
 
 import {
+  ADDRESS_PATTERN,
   bigIntToHex,
   type ChainName,
   computeServoPaymasterSigningHash,
   encodeServoErc20PaymasterConfig,
+  HEX_BYTES_PATTERN,
   packPaymasterAndData,
   RPC_INVALID_PARAMS,
   SERVO_SUPPORTED_ENTRY_POINTS,
+  UINT128_MAX,
 } from "@agent-paymaster/shared";
 import { concatHex, toHex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -18,12 +21,9 @@ import { type JsonRpcRequest, isJsonRpcFailure, isObject } from "./types.js";
 
 export type { PriceProvider } from "./price-provider.js";
 
-const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_QUANTITY_PATTERN = /^0x[0-9a-fA-F]+$/;
-const HEX_BYTES_PATTERN = /^0x(?:[0-9a-fA-F]{2})*$/;
 const WEI_PER_ETH = 10n ** 18n;
 const QUOTE_ID_LENGTH = 24;
-const UINT128_MAX = (1n << 128n) - 1n;
 const UINT48_MAX = (1n << 48n) - 1n;
 const BPS_SCALE = 10_000n;
 const DEFAULT_BILLED_PAYMASTER_VALIDATION_GAS_LIMIT = 50_000n;

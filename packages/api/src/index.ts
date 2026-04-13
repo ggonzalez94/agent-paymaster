@@ -4,6 +4,8 @@ import {
   buildHealth,
   logEvent,
   RPC_INTERNAL_ERROR,
+  ADDRESS_PATTERN,
+  PRIVATE_KEY_PATTERN,
   RPC_INVALID_PARAMS,
   RPC_INVALID_REQUEST,
   RPC_PARSE_ERROR,
@@ -109,8 +111,6 @@ export interface CreateAppOptions {
 }
 
 const DEFAULT_BUNDLER_RPC_URL = "http://127.0.0.1:3001/rpc";
-const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
-const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/u;
 const DEFAULT_PRICE_CACHE_SECONDS = 15;
 const DEFAULT_MAX_DEVIATION_BPS = 75;
 const DEFAULT_ORACLE_HTTP_TIMEOUT_MS = 2_000;
