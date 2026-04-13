@@ -68,6 +68,9 @@ export const bigIntToHex = (value: bigint): HexString => {
   return `0x${value.toString(16)}`;
 };
 
+export const hexToBigInt = (value: HexString): bigint =>
+  value === "0x" ? 0n : BigInt(value);
+
 export const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 export const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 export const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;

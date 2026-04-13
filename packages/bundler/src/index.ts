@@ -3,6 +3,7 @@ import {
   bigIntToHex,
   buildHealth,
   DEFAULT_TAIKO_RPC_URL,
+  hexToBigInt,
   logEvent,
   makeJsonRpcError,
   makeJsonRpcResult,
@@ -30,7 +31,6 @@ import {
   assertEntryPointSupported,
   BundlerRpcError,
   getBytesLength,
-  hexToBigInt,
   normalizeAddress,
   parseBundleSubmission,
   parseEntryPoint,
@@ -48,8 +48,28 @@ import {
 } from "./metrics.js";
 import { ViemAdmissionSimulator, ViemCallGasEstimator, ViemGasSimulator } from "./simulators.js";
 import { type BundlerSubmitterHealth, BundlerSubmitter } from "./submitter.js";
+import type {
+  AdmissionSimulator,
+  CallGasEstimator,
+  ClaimedUserOperation,
+  ClaimedUserOperations,
+  GasSimulator,
+  UserOperation,
+  UserOperationGasEstimate,
+  UserOperationReceiptLog,
+} from "./types.js";
 
 export type { HexString } from "@agent-paymaster/shared";
+export type {
+  AdmissionSimulator,
+  CallGasEstimator,
+  ClaimedUserOperation,
+  ClaimedUserOperations,
+  GasSimulator,
+  UserOperation,
+  UserOperationGasEstimate,
+  UserOperationReceiptLog,
+} from "./types.js";
 
 const REPUTATION_THROTTLE_FAILURES = 3;
 const REPUTATION_BAN_FAILURES = 5;
@@ -57,49 +77,12 @@ const DEFAULT_REPUTATION_WINDOW_MS = 5 * 60 * 1000;
 const DEFAULT_THROTTLE_WINDOW_MS = 10 * 1000;
 const DEFAULT_SUPPORTED_ENTRY_POINTS: HexString[] = [...SERVO_SUPPORTED_ENTRY_POINTS];
 
-export interface UserOperation {
-  sender: HexString;
-  nonce: HexString;
-  initCode: HexString;
-  callData: HexString;
-  callGasLimit?: HexString;
-  verificationGasLimit?: HexString;
-  preVerificationGas?: HexString;
-  paymasterVerificationGasLimit?: HexString;
-  paymasterPostOpGasLimit?: HexString;
-  maxFeePerGas: HexString;
-  maxPriorityFeePerGas: HexString;
-  paymasterAndData?: HexString;
-  signature: HexString;
-  l1DataGas?: HexString;
-}
-
-export interface UserOperationGasEstimate {
-  callGasLimit: HexString;
-  verificationGasLimit: HexString;
-  preVerificationGas: HexString;
-  paymasterVerificationGasLimit: HexString;
-  paymasterPostOpGasLimit: HexString;
-}
-
 export interface UserOperationLookupResult {
   userOperation: UserOperation;
   entryPoint: string;
   transactionHash: string | null;
   blockNumber: HexString | null;
   blockHash: HexString | null;
-}
-
-export interface UserOperationReceiptLog {
-  address: HexString;
-  data: HexString;
-  topics: readonly HexString[];
-  blockHash?: HexString;
-  blockNumber?: HexString;
-  transactionHash?: HexString;
-  transactionIndex?: HexString;
-  logIndex?: HexString;
-  removed?: boolean;
 }
 
 export interface UserOperationReceipt {
@@ -127,20 +110,6 @@ export interface BundlerBundle {
   bundleHash: string;
   entryPoint: string;
   userOperationHashes: string[];
-}
-
-export interface ClaimedUserOperation {
-  hash: string;
-  userOperation: UserOperation;
-  entryPoint: HexString;
-  receivedAt: number;
-  submissionTxHash: HexString | null;
-  submissionStartedAt: number | null;
-}
-
-export interface ClaimedUserOperations {
-  entryPoint: HexString;
-  userOperations: ClaimedUserOperation[];
 }
 
 interface StoredUserOperation {
@@ -311,26 +280,6 @@ interface BundlerConfig {
   callGasBufferPercent: bigint;
   callGasHeuristicMultiplier: bigint;
   maxFinalizedOperations: number;
-}
-
-export interface GasSimulator {
-  estimatePreOpGas(
-    userOperation: UserOperation,
-    entryPoint: HexString,
-    baseline: UserOperationGasEstimate,
-  ): Promise<bigint>;
-}
-
-export interface CallGasEstimator {
-  estimateCallGas(
-    sender: HexString,
-    callData: HexString,
-    entryPoint: HexString,
-  ): Promise<bigint | null>;
-}
-
-export interface AdmissionSimulator {
-  simulateValidation(userOperation: UserOperation, entryPoint: HexString): Promise<void>;
 }
 
 const parseBigIntWithFallback = (value: string | undefined, fallback: bigint): bigint => {

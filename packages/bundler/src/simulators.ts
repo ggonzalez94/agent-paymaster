@@ -13,7 +13,7 @@ import type {
   GasSimulator,
   UserOperation,
   UserOperationGasEstimate,
-} from "./index.js";
+} from "./types.js";
 
 export class ViemGasSimulator implements GasSimulator {
   private readonly publicClient;

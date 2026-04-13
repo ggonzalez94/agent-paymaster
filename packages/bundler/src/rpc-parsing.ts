@@ -1,6 +1,7 @@
 import {
   ADDRESS_PATTERN,
   bigIntToHex,
+  hexToBigInt,
   isJsonRpcId,
   isObject,
   normalizePaymasterAndData,
@@ -11,7 +12,7 @@ import {
   type JsonRpcRequest,
 } from "@agent-paymaster/shared";
 
-import type { UserOperation, UserOperationReceiptLog } from "./index.js";
+import type { UserOperation, UserOperationReceiptLog } from "./types.js";
 
 interface BundlerRpcErrorData {
   method?: string;
@@ -43,7 +44,7 @@ const normalizeHex = (value: string): HexString => {
   return value.toLowerCase() as HexString;
 };
 
-export const hexToBigInt = (value: string): bigint => {
+export const parseHexQuantity = (value: string): bigint => {
   const normalized = normalizeHex(value);
   if (normalized === "0x") {
     return 0n;

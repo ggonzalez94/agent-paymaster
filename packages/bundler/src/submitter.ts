@@ -1,18 +1,22 @@
 import { createPublicClient, createWalletClient, http, isAddress, toHex, type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { logEvent } from "@agent-paymaster/shared";
+import { hexToBigInt, logEvent, type HexString } from "@agent-paymaster/shared";
 
 import {
   ENTRY_POINT_ABI,
   collectUserOperationExecutions,
   extractBundlerErrorReason,
-  hexToBigInt,
   packUserOperation,
 } from "./entrypoint.js";
 
-import type { HexString, UserOperation, UserOperationReceiptLog } from "./index.js";
-import type { BundlerService, ClaimedUserOperation, ClaimedUserOperations } from "./index.js";
+import type {
+  ClaimedUserOperation,
+  ClaimedUserOperations,
+  UserOperation,
+  UserOperationReceiptLog,
+} from "./types.js";
+import type { BundlerService } from "./index.js";
 
 export interface SubmissionClient {
   simulateHandleOps(

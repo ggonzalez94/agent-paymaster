@@ -3,7 +3,9 @@ import { dirname } from "node:path";
 
 import Database from "better-sqlite3";
 
-import type { HexString, UserOperation, UserOperationReceiptLog } from "./index.js";
+import type { HexString } from "@agent-paymaster/shared";
+
+import type { UserOperation, UserOperationReceiptLog } from "./types.js";
 
 const DEFAULT_DB_PATH = "./data/servo.db";
 
