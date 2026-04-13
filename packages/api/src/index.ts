@@ -43,7 +43,7 @@ import {
   type RateLimitResult,
   SenderChurnTracker,
 } from "./rate-limit.js";
-import type { DependencyHealth } from "./types.js";
+import type { DependencyHealth } from "./bundler-client.js";
 
 const USER_OPERATION_SUBMISSION_METHODS = new Set(["eth_sendUserOperation"]);
 

@@ -1,10 +1,9 @@
-import { SERVO_TAIKO_ENTRY_POINT_V07 } from "@agent-paymaster/shared";
+import { SERVO_TAIKO_ENTRY_POINT_V07, WEI_PER_ETH } from "@agent-paymaster/shared";
 
 const DEPOSITS_SELECTOR = "0xfc7e286d";
 const DEFAULT_TAIKO_RPC_URL = "https://rpc.mainnet.taiko.xyz";
 const DEFAULT_LOW_THRESHOLD_WEI = 2_000_000_000_000_000n; // 0.002 ETH (~9 ops)
 const DEFAULT_CRITICAL_THRESHOLD_WEI = 500_000_000_000_000n; // 0.0005 ETH (~2 ops)
-const WEI_PER_ETH = 10n ** 18n;
 const MONITOR_TIMEOUT_MS = 3_000;
 const ABI_WORD_HEX_LENGTH = 64;
 

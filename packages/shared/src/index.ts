@@ -69,6 +69,7 @@ export const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 export const PRIVATE_KEY_PATTERN = /^0x[a-fA-F0-9]{64}$/;
 export const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;
 export const UINT128_MAX = (1n << 128n) - 1n;
+export const WEI_PER_ETH = 10n ** 18n;
 
 const PAYMASTER_ADDRESS_END = 42;
 const PAYMASTER_VALIDATION_GAS_END = 74;
@@ -217,7 +218,7 @@ export const normalizePaymasterAndData = ({
 // Servo ERC-20 mode paymaster encoding (Pimlico SingletonPaymasterV7)
 // ---------------------------------------------------------------
 
-const UINT48_MAX = (1n << 48n) - 1n;
+export const UINT48_MAX = (1n << 48n) - 1n;
 const UINT256_MAX = (1n << 256n) - 1n;
 
 const toHexPadded = (value: bigint, byteSize: number, fieldName: string): string => {

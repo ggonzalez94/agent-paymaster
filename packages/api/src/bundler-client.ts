@@ -1,5 +1,11 @@
 import { type JsonRpcRequest, type JsonRpcResponse, isObject } from "@agent-paymaster/shared";
-import type { DependencyHealth } from "./types.js";
+
+export interface DependencyHealth {
+  status: "ok" | "degraded";
+  latencyMs: number;
+  details?: unknown;
+  error?: string;
+}
 
 const DEFAULT_TIMEOUT_MS = 2_500;
 const MAX_RETRY_ATTEMPTS = 3;

@@ -11,6 +11,8 @@ import {
   RPC_INVALID_PARAMS,
   SERVO_SUPPORTED_ENTRY_POINTS,
   UINT128_MAX,
+  UINT48_MAX,
+  WEI_PER_ETH,
   type JsonRpcRequest,
   isJsonRpcFailure,
   isObject,
@@ -24,9 +26,7 @@ import type { PriceProvider } from "./price-provider.js";
 export type { PriceProvider } from "./price-provider.js";
 
 const HEX_QUANTITY_PATTERN = /^0x[0-9a-fA-F]+$/;
-const WEI_PER_ETH = 10n ** 18n;
 const QUOTE_ID_LENGTH = 24;
-const UINT48_MAX = (1n << 48n) - 1n;
 const BPS_SCALE = 10_000n;
 const DEFAULT_BILLED_PAYMASTER_VALIDATION_GAS_LIMIT = 50_000n;
 const DEFAULT_BILLED_PAYMASTER_POST_OP_GAS = 50_000n;

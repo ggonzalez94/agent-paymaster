@@ -49,7 +49,7 @@ import { BundlerSubmitter } from "@agent-paymaster/bundler/src/submitter.js";
 import { createApp } from "./index.js";
 import { StaticPriceProvider } from "./price-provider.js";
 import type { JsonRpcRequest, JsonRpcResponse } from "@agent-paymaster/shared";
-import type { DependencyHealth } from "./types.js";
+import type { DependencyHealth } from "./bundler-client.js";
 
 // ---------------------------------------------------------------------------
 // Gate: skip the entire suite unless explicitly enabled
