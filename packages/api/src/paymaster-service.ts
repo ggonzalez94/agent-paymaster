@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   bigIntToHex,
+  type ChainName,
   computeServoPaymasterSigningHash,
   encodeServoErc20PaymasterConfig,
   packPaymasterAndData,
@@ -15,7 +16,6 @@ import type { PriceProvider } from "./price-provider.js";
 import { type JsonRpcRequest, isJsonRpcFailure, isObject } from "./types.js";
 
 export type { PriceProvider } from "./price-provider.js";
-export { StaticPriceProvider } from "./price-provider.js";
 
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const HEX_QUANTITY_PATTERN = /^0x[0-9a-fA-F]+$/;
@@ -79,8 +79,6 @@ export interface PaymasterCapabilities {
  */
 const DUMMY_SIGNATURE: `0x${string}` =
   "0xfffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c";
-
-export type ChainName = "taikoMainnet" | "taikoHoodi";
 
 interface ChainConfig {
   name: ChainName;
