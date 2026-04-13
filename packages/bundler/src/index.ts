@@ -8,6 +8,7 @@ import {
   makeJsonRpcError,
   makeJsonRpcResult,
   normalizePaymasterAndData,
+  parsePositiveIntegerWithFallback,
   PRIVATE_KEY_PATTERN,
   RPC_INTERNAL_ERROR,
   RPC_INVALID_PARAMS,
@@ -565,19 +566,6 @@ const resolveInitCode = (input: Record<string, unknown>): HexString => {
 
   // No factory and no initCode — existing account
   return "0x";
-};
-
-const parsePositiveIntegerWithFallback = (value: string | undefined, fallback: number): number => {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    return fallback;
-  }
-
-  return parsed;
 };
 
 const parseBigIntWithFallback = (value: string | undefined, fallback: bigint): bigint => {

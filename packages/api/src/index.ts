@@ -17,6 +17,7 @@ import {
   isJsonRpcRequest,
   isObject,
   makeJsonRpcError,
+  parsePositiveIntegerWithFallback,
 } from "@agent-paymaster/shared";
 import { Hono } from "hono";
 
@@ -116,15 +117,6 @@ const DEFAULT_CHAINLINK_ETH_MAX_AGE_SECONDS = 7_200;
 const DEFAULT_CHAINLINK_USDC_MAX_AGE_SECONDS = 86_400;
 const DEFAULT_ETHEREUM_MAINNET_RPC_URL = "https://ethereum-rpc.publicnode.com";
 
-const parseIntWithFallback = (value: string | undefined, fallback: number): number => {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-};
-
 const parseOptionalAddress = (value: string | undefined): string | undefined => {
   if (value === undefined) {
     return undefined;
@@ -159,34 +151,36 @@ const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig 
         | `0x${string}`
         | undefined,
       ethUsdMaxAgeMs:
-        parseIntWithFallback(
+        parsePositiveIntegerWithFallback(
           environment.PAYMASTER_CHAINLINK_ETH_USD_MAX_AGE_SECONDS,
           DEFAULT_CHAINLINK_ETH_MAX_AGE_SECONDS,
         ) * 1000,
       usdcUsdMaxAgeMs:
-        parseIntWithFallback(
+        parsePositiveIntegerWithFallback(
           environment.PAYMASTER_CHAINLINK_USDC_USD_MAX_AGE_SECONDS,
           DEFAULT_CHAINLINK_USDC_MAX_AGE_SECONDS,
         ) * 1000,
     }),
     fallbacks: [
       new CoinbaseOracleSource({
-        timeoutMs: parseIntWithFallback(
+        timeoutMs: parsePositiveIntegerWithFallback(
           environment.PAYMASTER_ORACLE_HTTP_TIMEOUT_MS,
           DEFAULT_ORACLE_HTTP_TIMEOUT_MS,
         ),
       }),
       new KrakenOracleSource({
-        timeoutMs: parseIntWithFallback(
+        timeoutMs: parsePositiveIntegerWithFallback(
           environment.PAYMASTER_ORACLE_HTTP_TIMEOUT_MS,
           DEFAULT_ORACLE_HTTP_TIMEOUT_MS,
         ),
       }),
     ],
     cacheTtlMs:
-      parseIntWithFallback(environment.PAYMASTER_PRICE_CACHE_SECONDS, DEFAULT_PRICE_CACHE_SECONDS) *
-      1000,
-    maxPrimaryDeviationBps: parseIntWithFallback(
+      parsePositiveIntegerWithFallback(
+        environment.PAYMASTER_PRICE_CACHE_SECONDS,
+        DEFAULT_PRICE_CACHE_SECONDS,
+      ) * 1000,
+    maxPrimaryDeviationBps: parsePositiveIntegerWithFallback(
       environment.PAYMASTER_ORACLE_MAX_DEVIATION_BPS,
       DEFAULT_MAX_DEVIATION_BPS,
     ),
@@ -200,27 +194,33 @@ const resolveConfig = (environment: NodeJS.ProcessEnv = process.env): ApiConfig 
   return {
     bundlerRpcUrl,
     bundlerHealthUrl: environment.BUNDLER_HEALTH_URL ?? bundlerRpcUrl.replace(/\/rpc$/u, "/health"),
-    requestTimeoutMs: parseIntWithFallback(environment.REQUEST_TIMEOUT_MS, 2_500),
+    requestTimeoutMs: parsePositiveIntegerWithFallback(environment.REQUEST_TIMEOUT_MS, 2_500),
     rateLimit: {
-      windowMs: parseIntWithFallback(environment.RATE_LIMIT_WINDOW_MS, 60_000),
-      maxRequestsPerWindow: parseIntWithFallback(environment.RATE_LIMIT_MAX_REQUESTS, 60),
-      senderMaxRequestsPerWindow: parseIntWithFallback(
+      windowMs: parsePositiveIntegerWithFallback(environment.RATE_LIMIT_WINDOW_MS, 60_000),
+      maxRequestsPerWindow: parsePositiveIntegerWithFallback(
+        environment.RATE_LIMIT_MAX_REQUESTS,
+        60,
+      ),
+      senderMaxRequestsPerWindow: parsePositiveIntegerWithFallback(
         environment.RATE_LIMIT_SENDER_MAX_REQUESTS,
         30,
       ),
-      globalMaxRequestsPerWindow: parseIntWithFallback(
+      globalMaxRequestsPerWindow: parsePositiveIntegerWithFallback(
         environment.RATE_LIMIT_GLOBAL_MAX_REQUESTS,
         600,
       ),
-      expensiveMethodMaxRequestsPerWindow: parseIntWithFallback(
+      expensiveMethodMaxRequestsPerWindow: parsePositiveIntegerWithFallback(
         environment.RATE_LIMIT_EXPENSIVE_METHOD_MAX_REQUESTS,
         20,
       ),
     },
     paymaster: {
       paymasterAddress: parseOptionalAddress(environment.PAYMASTER_ADDRESS),
-      quoteTtlSeconds: parseIntWithFallback(environment.PAYMASTER_QUOTE_TTL_SECONDS, 90),
-      surchargeBps: parseIntWithFallback(environment.PAYMASTER_SURCHARGE_BPS, 500),
+      quoteTtlSeconds: parsePositiveIntegerWithFallback(
+        environment.PAYMASTER_QUOTE_TTL_SECONDS,
+        90,
+      ),
+      surchargeBps: parsePositiveIntegerWithFallback(environment.PAYMASTER_SURCHARGE_BPS, 500),
       quoteSignerPrivateKey: environment.PAYMASTER_QUOTE_SIGNER_PRIVATE_KEY as
         | `0x${string}`
         | undefined,

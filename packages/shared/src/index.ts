@@ -71,6 +71,22 @@ export const HEX_BYTES_PATTERN = /^0x(?:[a-fA-F0-9]{2})*$/;
 export const UINT128_MAX = (1n << 128n) - 1n;
 export const WEI_PER_ETH = 10n ** 18n;
 
+export const parsePositiveIntegerWithFallback = (
+  value: string | undefined,
+  fallback: number,
+): number => {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+};
+
 const PAYMASTER_ADDRESS_END = 42;
 const PAYMASTER_VALIDATION_GAS_END = 74;
 const PAYMASTER_POST_OP_GAS_END = 106;
