@@ -1,6 +1,8 @@
 import { createPublicClient, createWalletClient, http, isAddress, toHex, type Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
+import { logEvent } from "@agent-paymaster/shared";
+
 import {
   ENTRY_POINT_ABI,
   collectUserOperationExecutions,
@@ -8,7 +10,6 @@ import {
   hexToBigInt,
   packUserOperation,
 } from "./entrypoint.js";
-import { logEvent } from "./logger.js";
 
 import type { HexString, UserOperation, UserOperationReceiptLog } from "./index.js";
 import type { BundlerService, ClaimedUserOperation, ClaimedUserOperations } from "./index.js";

@@ -1,7 +1,5 @@
-import type { ChainName } from "@agent-paymaster/shared";
+import { logEvent, type ChainName } from "@agent-paymaster/shared";
 import { createPublicClient, http, parseAbi, type Address } from "viem";
-
-import { logEvent } from "./logger.js";
 
 export interface PriceProvider {
   getUsdcPerEthMicros(chain: ChainName): bigint | Promise<bigint>;

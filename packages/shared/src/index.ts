@@ -1,5 +1,7 @@
 import { encodeAbiParameters, keccak256 } from "viem";
 
+export { logEvent, type LogLevel, type LogFields } from "./logger.js";
+
 export type ChainName = "taikoMainnet" | "taikoHoodi";
 export type HexString = `0x${string}`;
 export type Address = `0x${string}`;
@@ -9,11 +11,6 @@ export const SERVO_TAIKO_ENTRY_POINT_V07: Address = "0x0000000071727de22e5e9d8ba
 
 /** EntryPoints Servo can actually execute through the configured paymaster path. */
 export const SERVO_SUPPORTED_ENTRY_POINTS = [SERVO_TAIKO_ENTRY_POINT_V07] as const;
-
-export interface RpcConfig {
-  chain: ChainName;
-  rpcUrl: string;
-}
 
 export interface ServiceHealth {
   service: string;
@@ -32,7 +29,6 @@ export const buildHealth = (service: string): ServiceHealth => ({
  * parses them. See `src/pimlico/SingletonPaymasterV7.sol` for the byte-level layout.
  */
 export const SERVO_PAYMASTER_MODE_ERC20 = 1;
-export const SERVO_PAYMASTER_MODE_VERIFYING = 0;
 
 /**
  * Fixed size in bytes of the ERC-20 paymaster config (mode byte + flags byte + fixed 117-byte config),

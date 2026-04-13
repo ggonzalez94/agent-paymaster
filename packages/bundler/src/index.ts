@@ -1,5 +1,6 @@
 import {
   buildHealth,
+  logEvent,
   normalizePaymasterAndData,
   SERVO_SUPPORTED_ENTRY_POINTS,
   SERVO_TAIKO_ENTRY_POINT_V07,
@@ -17,7 +18,6 @@ import {
   extractSimulationPreOpGas,
   packUserOperation,
 } from "./entrypoint.js";
-import { logEvent } from "./logger.js";
 import { BundlerPersistenceStore } from "./persistence.js";
 import { type BundlerSubmitterHealth, BundlerSubmitter } from "./submitter.js";
 

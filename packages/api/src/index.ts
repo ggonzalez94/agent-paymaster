@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import { buildHealth } from "@agent-paymaster/shared";
+import { buildHealth, logEvent } from "@agent-paymaster/shared";
 import { Hono } from "hono";
 
 import { type BundlerClient, HttpBundlerClient } from "./bundler-client.js";
 import { EntryPointMonitor, type DepositHealth } from "./entrypoint-monitor.js";
-import { logEvent } from "./logger.js";
 import { MetricsRegistry } from "./metrics.js";
 import { openApiDocument } from "./openapi.js";
 import { RpcGasPriceOracle } from "./gas-price-oracle.js";
