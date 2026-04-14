@@ -18,7 +18,8 @@ Key addresses on Taiko Alethia (chain 167000):
 
 | Contract            | Address                                      |
 | ------------------- | -------------------------------------------- |
-| ServoAccountFactory | `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716` |
+| ServoPaymaster      | `0x15a5451FeDc348312F1B59F7D930D494B7A73393` |
+| ServoAccountFactory | `0x27A8169f8C837D66497b4FD1002ef178F88cc1D6` |
 | EntryPoint v0.7     | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` |
 | USDC                | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b` |
 
@@ -127,10 +128,10 @@ pnpm --filter @agent-paymaster/paymaster-contracts deploy:factory:taiko-hoodi
 
 Key contracts in `packages/paymaster-contracts/src`:
 
-- `ServoPaymaster.sol` — wrapper that inherits Pimlico's audited `SingletonPaymasterV7` directly from the upstream `pimlicolabs/singleton-paymaster` submodule, adds an admin-gated `withdrawToken` sweep for the pooled USDC treasury, and disables Pimlico's extra unused-gas penalty overlay. Servo signs ERC-20 mode quotes off-chain with a `personal_sign`-compatible Pimlico hash; the 5% surcharge is baked into the signed `exchangeRate`.
+- `ServoPaymaster.sol` — wrapper that inherits Pimlico's audited `SingletonPaymasterV7` directly from the upstream `pimlicolabs/singleton-paymaster` submodule, adds an admin-gated `withdrawToken` sweep for the pooled USDC treasury, and disables Pimlico's extra unused-gas penalty overlay. Servo signs ERC-20 mode quotes off-chain with a `personal_sign`-compatible Pimlico hash; the 5% surcharge is baked into the signed `exchangeRate`. Deployed on Taiko Alethia at `0x15a5451FeDc348312F1B59F7D930D494B7A73393`.
 - `Permit4337Account.sol` — minimal ERC-4337 account with ERC-1271 permit support (smoke-test helper).
 - `ServoAccount.sol` — canonical Servo single-owner ERC-4337 account with `execute`, `executeBatch`, ERC-1271 validation, and ERC-721 safe-receive support via OpenZeppelin `ERC721Holder`.
-- `ServoAccountFactory.sol` — deterministic CREATE2 factory for ServoAccount deployment and address derivation. New Taiko mainnet deployments should use `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716`.
+- `ServoAccountFactory.sol` — deterministic CREATE2 factory for ServoAccount deployment and address derivation. Deployed on Taiko Alethia at `0x27A8169f8C837D66497b4FD1002ef178F88cc1D6`.
 
 ## Docker
 

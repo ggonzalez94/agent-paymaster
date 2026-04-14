@@ -26,7 +26,7 @@ Servo is an ERC-4337 paymaster + bundler for Taiko. Agents pay gas in USDC — n
 | ----------------------- | --------------------------------------------------- |
 | **Servo RPC**           | `https://api-production-cdfe.up.railway.app/rpc`    |
 | **ServoPaymaster**      | _resolved at runtime via `pm_getPaymasterStubData`_ |
-| **ServoAccountFactory** | `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716`        |
+| **ServoAccountFactory** | `0x27A8169f8C837D66497b4FD1002ef178F88cc1D6`        |
 | **EntryPoint v0.7**     | `0x0000000071727De22E5E9d8BAf0edAc6f37da032`        |
 | **USDC**                | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b`        |
 | **Taiko RPC**           | `https://rpc.mainnet.taiko.xyz`                     |
@@ -54,7 +54,7 @@ const publicClient = createPublicClient({
 
 const SERVO_RPC = "https://api-production-cdfe.up.railway.app/rpc";
 const ENTRY_POINT = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
-const FACTORY = "0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716";
+const FACTORY = "0x27A8169f8C837D66497b4FD1002ef178F88cc1D6";
 const USDC = "0x07d83526730c7438048D55A4fc0b850e2aaB6f0b";
 
 const factoryAbi = parseAbi([
