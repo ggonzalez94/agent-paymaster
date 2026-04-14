@@ -10,6 +10,13 @@ Format:
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-04-13
+
+### Added
+
+- Deployed the new `ServoPaymaster` contract to Taiko Alethia at `0x15a5451FeDc348312F1B59F7D930D494B7A73393` and seeded it with a 0.005 ETH EntryPoint deposit. Operators must set `PAYMASTER_ADDRESS=0x15a5451FeDc348312F1B59F7D930D494B7A73393` on the API and bundler services to route quotes and submissions at the new contract; the former `TaikoUsdcPaymaster` deployment is retired and its EntryPoint deposit and accumulated USDC have been swept to the treasury.
+- Redeployed `ServoAccountFactory` to Taiko Alethia at `0x27A8169f8C837D66497b4FD1002ef178F88cc1D6`. The compiler bump to `solc 0.8.26` and the dependency/EVM refresh produced new `ServoAccount` creation code, so the previous factory at `0x4055ec5bf8f7910A23F9eBFba38421c5e24E2716` is superseded. Counterfactual addresses derived from the new factory will differ from the old one — clients must re-derive and re-fund.
+
 ### Changed
 
 - Replaced the hand-rolled `TaikoUsdcPaymaster` contract with a thin `ServoPaymaster` wrapper over Pimlico's audited `SingletonPaymasterV7`, imported directly from the upstream `pimlicolabs/singleton-paymaster` git submodule instead of an in-tree vendored copy. Deletes ~550 lines of custom contract surface in exchange for Pimlico's audited base, and upstream security fixes now flow in with a submodule bump.
