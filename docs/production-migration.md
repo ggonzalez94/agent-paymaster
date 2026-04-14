@@ -5,16 +5,16 @@
 
 ## Addresses
 
-| Handle | Address | Role after migration |
-|---|---|---|
-| `$MULTISIG` | `0x8Ba87a7C5908d0bE9fd86640F87976AB6e5E80E4` | `DEFAULT_ADMIN_ROLE` + `MANAGER_ROLE` on `ServoPaymaster` |
-| `$OPS` | _tbd — fresh EOA, not yet generated_ | Bundler submitter + quote signer |
-| `$OLD_ADMIN` | `0x2AB05c081B31B3882C1c0367D9b734e530237B15` | Retired after revoke. Leaked in an earlier session — must lose all roles before we call this done. |
-| `$OLD_QUOTE_SIGNER` | `0x208cc91CE369E969d246DeBf2a78f28BdeebB9B8` | Retired once `$OPS` is live. |
-| `$PM` (ServoPaymaster) | `0x15a5451FeDc348312F1B59F7D930D494B7A73393` | — |
-| `$FACTORY` (ServoAccountFactory) | `0x27A8169f8C837D66497b4FD1002ef178F88cc1D6` | Not ownable; no action |
-| EntryPoint | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | — |
-| USDC | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b` | — |
+| Handle                           | Address                                      | Role after migration                                                                               |
+| -------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `$MULTISIG`                      | `0x8Ba87a7C5908d0bE9fd86640F87976AB6e5E80E4` | `DEFAULT_ADMIN_ROLE` + `MANAGER_ROLE` on `ServoPaymaster`                                          |
+| `$OPS`                           | _tbd — fresh EOA, not yet generated_         | Bundler submitter + quote signer                                                                   |
+| `$OLD_ADMIN`                     | `0x2AB05c081B31B3882C1c0367D9b734e530237B15` | Retired after revoke. Leaked in an earlier session — must lose all roles before we call this done. |
+| `$OLD_QUOTE_SIGNER`              | `0x208cc91CE369E969d246DeBf2a78f28BdeebB9B8` | Retired once `$OPS` is live.                                                                       |
+| `$PM` (ServoPaymaster)           | `0x15a5451FeDc348312F1B59F7D930D494B7A73393` | —                                                                                                  |
+| `$FACTORY` (ServoAccountFactory) | `0x27A8169f8C837D66497b4FD1002ef178F88cc1D6` | Not ownable; no action                                                                             |
+| EntryPoint                       | `0x0000000071727De22E5E9d8BAf0edAc6f37da032` | —                                                                                                  |
+| USDC                             | `0x07d83526730c7438048D55A4fc0b850e2aaB6f0b` | —                                                                                                  |
 
 ## Phase 1 — Grant roles to the multisig (`$OLD_ADMIN` still active)
 
