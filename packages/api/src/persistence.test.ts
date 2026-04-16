@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { PaymasterQuote } from "./paymaster-service.js";
 import { PersistenceStore } from "./persistence.js";
 
 function tempDbPath(): string {
@@ -82,7 +83,7 @@ describe("PersistenceStore", () => {
         sender: "0xSENDER",
         tokenAddress: "0xUSDC",
         ...overrides,
-      }) as any;
+      }) as unknown as PaymasterQuote;
 
     it("saves and retrieves a quote", () => {
       const store = createStore();
