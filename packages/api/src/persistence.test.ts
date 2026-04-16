@@ -44,13 +44,7 @@ describe("PersistenceStore", () => {
   });
 
   it("creates parent directories when they do not exist", () => {
-    const dbPath = join(
-      tmpdir(),
-      `servo-nested-${Date.now()}`,
-      "a",
-      "b",
-      "test.db",
-    );
+    const dbPath = join(tmpdir(), `servo-nested-${Date.now()}`, "a", "b", "test.db");
     dirs.push(join(dbPath, "..", "..", ".."));
     const store = new PersistenceStore(dbPath);
     stores.push(store);
