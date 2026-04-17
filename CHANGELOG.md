@@ -10,6 +10,13 @@ Format:
 
 ## [Unreleased]
 
+## [v0.3.2] - 2026-04-17
+
+### Added
+
+- Next.js landing page Docker image (`Dockerfile.web`) with standalone output for GKE deployment.
+- GKE release workflow now builds and pushes the web image alongside API and bundler images.
+
 ## [v0.3.1] - 2026-04-16
 
 ### Changed
