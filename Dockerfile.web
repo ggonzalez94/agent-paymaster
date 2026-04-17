@@ -1,0 +1,24 @@
+FROM node:22-slim AS base
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/web/package.json packages/web/
+RUN pnpm install --frozen-lockfile --filter @agent-paymaster/web
+
+FROM base AS build
+COPY --from=deps /app ./
+COPY packages/web packages/web
+RUN pnpm --filter @agent-paymaster/web build
+
+FROM node:22-slim AS runtime
+WORKDIR /app
+COPY --from=build /app/packages/web/.next/standalone ./
+COPY --from=build /app/packages/web/.next/static ./packages/web/.next/static
+COPY --from=build /app/packages/web/public ./packages/web/public
+USER node
+EXPOSE 3000
+ENV PORT=3000 HOSTNAME="0.0.0.0" NODE_ENV=production
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://localhost:3000').then((r) => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+CMD ["node", "packages/web/server.js"]
