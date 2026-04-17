@@ -1,3 +1,5 @@
+import { codeToHtml } from "shiki";
+
 const codeString = `import { createClient, encodeFunctionData, http, maxUint256, parseAbi } from "viem";
 import { taikoAlethia } from "viem/chains";
 
@@ -101,7 +103,12 @@ const integrationDetails = [
   { label: "EntryPoint", value: "0x0000000071727De22E5E9d8BAf0edAc6f37da032" },
 ];
 
-export function CodeExample() {
+export async function CodeExample() {
+  const highlightedHtml = await codeToHtml(codeString, {
+    lang: "typescript",
+    theme: "github-dark",
+  });
+
   return (
     <section id="integrate" className="py-24 md:py-32">
       <div className="mx-auto max-w-6xl px-6">
@@ -198,21 +205,22 @@ export function CodeExample() {
             </div>
           </div>
 
-          {/* Right: Code block */}
+          {/* Right: Code block with syntax highlighting */}
           <div className="relative">
             <div className="absolute -inset-4 rounded-3xl bg-taiko-300/5 blur-2xl" />
-            <div className="relative overflow-hidden rounded-2xl border border-surface-200 bg-surface-50">
+            <div className="relative overflow-hidden rounded-2xl border border-surface-200">
               {/* Window chrome */}
-              <div className="flex items-center gap-2 border-b border-surface-200 px-4 py-3">
-                <div className="h-3 w-3 rounded-full bg-surface-300/50" />
-                <div className="h-3 w-3 rounded-full bg-surface-300/50" />
-                <div className="h-3 w-3 rounded-full bg-surface-300/50" />
+              <div className="flex items-center gap-2 border-b border-surface-200 bg-[#24292e] px-4 py-3">
+                <div className="h-3 w-3 rounded-full bg-[#ff5f56]" />
+                <div className="h-3 w-3 rounded-full bg-[#ffbd2e]" />
+                <div className="h-3 w-3 rounded-full bg-[#27c93f]" />
                 <span className="ml-3 text-xs font-medium text-surface-400">agent.ts</span>
               </div>
-              {/* Code */}
-              <pre className="overflow-x-auto p-6 text-[13px] leading-relaxed">
-                <code className="font-mono text-surface-600">{codeString}</code>
-              </pre>
+              {/* Highlighted code */}
+              <div
+                className="overflow-x-auto text-[13px] leading-relaxed [&_pre]:p-6 [&_pre]:!bg-[#24292e]"
+                dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+              />
             </div>
           </div>
         </div>
