@@ -10,6 +10,12 @@ Format:
 
 ## [Unreleased]
 
+## [v0.3.3] - 2026-04-17
+
+### Fixed
+
+- Updated landing page RPC URLs from Railway to `servo.taiko.xyz`.
+
 ## [v0.3.2] - 2026-04-17
 
 ### Added
